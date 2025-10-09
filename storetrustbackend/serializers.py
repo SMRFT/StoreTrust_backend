@@ -1,6 +1,33 @@
 from rest_framework import serializers
-from .models import TravellersIN
-from bson import ObjectId
+from .models import TravellersIN, TravellerIntent, Vendors, Items, CollegeIntent, MessIntent
+from bson import ObjectId, Decimal128
+
+
+class ObjectIdField(serializers.Field):
+    def to_representation(self, value):
+        return str(value)
+    def to_internal_value(self, data):
+        return ObjectId(data)
+
+
+class Decimal128Field(serializers.Field):
+    def to_representation(self, value):
+        if isinstance(value, Decimal128):
+            return float(value.to_decimal())
+        return float(value) if value is not None else None
+    def to_internal_value(self, data):
+        return Decimal128(str(data))
+
+from rest_framework import serializers
+from .models import Vendor
+
+class VendorSerializer(serializers.ModelSerializer):
+    _id = serializers.CharField(source='id', read_only=True)
+
+    class Meta:
+        model = Vendor
+        fields = ["_id", "name", "contactPerson", "phone", "email"]
+
 
 class TravellersINSerializer(serializers.ModelSerializer):
     # Handle ObjectId fields properly
@@ -11,16 +38,15 @@ class TravellersINSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'purchase_category',
-            'vendor',
-            'date',
-            'supplier_address',
-            'contact_person',
-            'phone',
+            'vendor_id',
+            'grn_number',
+            'is_active',
+            'payment_status',
+            'date',            
             'invoice_no',
             'invoice_date',
             'credit_period',
             'due_date',
-            'reference',
             'payment_mode',
             'items',
             'non_taxable_amount',
@@ -46,7 +72,6 @@ class TravellersINSerializer(serializers.ModelSerializer):
             'lastmodified_date',
         ]
         read_only_fields = ['id', 'created_date', 'lastmodified_date']
-    
     def to_representation(self, instance):
         """Convert ObjectId to string for JSON serialization"""
         ret = super().to_representation(instance)
@@ -69,11 +94,88 @@ class ObjectIdField(serializers.Field):
         return str(value)
     def to_internal_value(self, data):
         return ObjectId(data)
-    
-    
-from .models import TravellerIntent
+
 class TravellerIntentSerializer(serializers.ModelSerializer):
     id = ObjectIdField(read_only=True)
     class Meta:
         model = TravellerIntent
         fields = '__all__'
+
+
+
+class VendorsSerializer(serializers.ModelSerializer):
+    created_date = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S", required=False)
+    lastmodified_date = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S", required=False)
+    id = serializers.SerializerMethodField()  # Convert ObjectId to string if needed
+
+    def get_id(self, obj):
+        return str(obj.id) if isinstance(obj.id, ObjectId) else obj.id
+
+    class Meta:
+        model = Vendors
+        fields = "__all__"
+        # Make audit fields read-only since we'll set them programmatically
+        read_only_fields = ['created_by', 'created_date', 'lastmodified_by', 'lastmodified_date']
+
+    def create(self, validated_data):
+        # Get the employee_id from the context (passed from the view)
+        employee_id = self.context.get('employee_id')
+        
+        # Set the created_by field
+        if employee_id:
+            validated_data['created_by'] = employee_id
+            
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Get the employee_id from the context (passed from the view)
+        employee_id = self.context.get('employee_id')
+        
+        # Set the lastmodified_by field
+        if employee_id:
+            validated_data['lastmodified_by'] = employee_id
+            
+        return super().update(instance, validated_data)
+
+
+
+class ItemsSerializer(serializers.ModelSerializer):
+    created_date = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S", required=False)
+    lastmodified_date = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S", required=False)
+    id = serializers.SerializerMethodField()
+
+    def get_id(self, obj):
+        return str(obj.id) if isinstance(obj.id, ObjectId) else obj.id
+
+    class Meta:
+        model = Items
+        fields = "__all__"
+        read_only_fields = ['created_by', 'created_date', 'lastmodified_by', 'lastmodified_date']
+
+    def create(self, validated_data):
+        employee_id = self.context.get('employee_id')
+        if employee_id:
+            validated_data['created_by'] = employee_id
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        employee_id = self.context.get('employee_id')
+        if employee_id:
+            validated_data['lastmodified_by'] = employee_id
+        return super().update(instance, validated_data)
+
+class CollegeIntentSerializer(serializers.ModelSerializer):
+   created_by = serializers.CharField() 
+   class Meta:
+        model = CollegeIntent
+        fields = "__all__"
+
+class MessIntentSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = MessIntent
+        fields = '__all__'
+
+
+
+

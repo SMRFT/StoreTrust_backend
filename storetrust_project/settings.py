@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'storetrustbackend',
     'rest_framework',
     'corsheaders',
+   
 ]
 
 MIDDLEWARE = [
@@ -92,7 +93,7 @@ import certifi
 DATABASES = {
     'default': {
         'ENGINE': 'djongo',
-        'NAME': os.getenv("STORETRUST_DB_NAME"),
+        'NAME': os.getenv("STORETRUST_DB_NAME", "StoreTrust"),
         'ENFORCE_SCHEMA': False,
         'CLIENT': {
             'host': os.getenv("GLOBAL_DB_HOST"),

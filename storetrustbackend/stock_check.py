@@ -19,7 +19,7 @@ def get_low_stock_items():
         # Connect to DB
         if env_type in ["test", "prod"]:
             # Usually hosted MongoDB (Atlas, etc.) needs TLS
-            client = MongoClient(mongo_uri, tls=True, tlsCAFile=certifi.where())
+            client = MongoClient(mongo_uri)
         else:
             # Local / self-hosted IP does not need TLS
             client = MongoClient(mongo_uri)

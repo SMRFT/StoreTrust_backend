@@ -6,7 +6,6 @@ urlpatterns = [
     path('inventory/check-stock/', inventory.stock_alerts, name='stock_alerts'),
     path('travellers-in/', travellerIN.create_travellers_in, name='create_travellers_in'),
     path('travellers-in/list/', travellerIN.get_travellers_in_list, name='get_travellers_in_list'),    
-    path('travellers-in/update-payment-status/', travellerIN.update_payment_status, name='update_payment_status'),
     path('travellers-in/previous-purchases/', travellerIN.get_previous_purchases, name='previous_purchases'),
     path('travellers-in/update/<path:grn_number>/', travellerIN.travellers_in_update, name='travellers_in_update'),
     path('travellers-in/delete/', travellerIN.delete_grn_record, name='delete_grn_record'),

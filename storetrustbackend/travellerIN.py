@@ -40,7 +40,10 @@ if env_type in ["test", "prod"]:
     client = MongoClient(mongo_uri)
 else:
     client = MongoClient(mongo_uri, tls=True, tlsCAFile=certifi.where())
+    
 
+@csrf_exempt
+@permission_classes([HasRolePermission])
 def update_stock_by_hsn(items):
     """
     Update total stock for each HSN in items list
@@ -183,6 +186,7 @@ def convert_decimal128_to_float(value):
 
 @csrf_exempt
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def get_travellers_in_list(request):
     """
     Get list of TravellersIN records with pagination (only active records), including vendor details
@@ -392,6 +396,7 @@ def get_travellers_in_list(request):
 
 
 @api_view(['PATCH'])
+@permission_classes([HasRolePermission])
 def delete_grn_record(request):
     """
     Soft delete a GRN record by setting is_active to False
@@ -445,6 +450,7 @@ def delete_grn_record(request):
         }, status=500)
 
 @api_view(['PATCH'])
+@permission_classes([HasRolePermission])
 def update_payment_status(request):
     grn_number = request.query_params.get('grn_number')
     if not grn_number:
@@ -638,6 +644,7 @@ def clean_mongo_document(doc):
     return doc
 
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def travellers_in_detail(request, grn_number):
     """
     Retrieve a specific TravellersIN record by GRN number
@@ -757,6 +764,7 @@ def normalize_dates(data):
     return data
 
 @api_view(['PATCH'])
+@permission_classes([HasRolePermission])
 def travellers_in_update(request, grn_number):
     """
     Update an existing TravellersIN record by GRN number
@@ -903,6 +911,7 @@ def convert_decimal128_to_float(value):
         return value
 
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def get_previous_purchases(request):
     hsn = request.GET.get('hsn')
     item_name = request.GET.get('item_name')
@@ -989,6 +998,7 @@ purchases_collection = db.travellers_in
 intents_collection = db.traveller_intent
 items_collection = db["items"]
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def travellers_stock(request):
     item_name = request.GET.get("itemName")
     hsn_number = request.GET.get("hsn")
@@ -1130,6 +1140,7 @@ from rest_framework import status
 from pymongo import MongoClient
 
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def items_list(request):
     """
     Return list of all active items with id, itemName, and hsn

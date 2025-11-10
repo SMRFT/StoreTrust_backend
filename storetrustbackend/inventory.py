@@ -15,8 +15,18 @@ import os
 from dotenv import load_dotenv
 import certifi
 from pymongo import MongoClient
-# Import the low-stock checker you just finalized
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+from bson.decimal128 import Decimal128
+from datetime import datetime
 from .stock_check import get_low_stock_items
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -32,7 +42,7 @@ else:
     client = MongoClient(mongo_uri, tls=True, tlsCAFile=certifi.where())
 
 @api_view(['POST'])
-# @permission_classes([HasRolePermission])
+@permission_classes([HasRolePermission])
 def create_vendor(request):
     """
     Create a new vendor with auto-generated vendor_id
@@ -92,7 +102,7 @@ from bson.decimal128 import Decimal128
 from bson import json_util
 
 @api_view(['GET'])
-# @permission_classes([HasRolePermission])
+@permission_classes([HasRolePermission])
 def list_vendors(request):
     try:
         DB_NAME = "StoreTrust"
@@ -176,7 +186,7 @@ def delete_vendor(request, vendor_id):
 
 
 @api_view(['POST'])
-# @permission_classes([HasRolePermission])
+@permission_classes([HasRolePermission])
 def create_item(request):
     employee_id = request.data.get('auth-user-id')
     serializer = ItemsSerializer(data=request.data, context={'employee_id': employee_id})
@@ -190,12 +200,9 @@ def create_item(request):
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from pymongo import MongoClient
 
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def list_items(request):
     try:
         # 1️⃣ Connect to MongoDB
@@ -267,7 +274,7 @@ def delete_item(request, item_id):
     item.delete()
     return Response({'message': 'Item deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
 
-
+@permission_classes([HasRolePermission])
 @api_view(['GET'])
 def get_groups(request):
     groups = Items.objects.values_list('group', flat=True).distinct().order_by('group')
@@ -275,6 +282,7 @@ def get_groups(request):
 
 
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def get_categories(request):
     group = request.GET.get('group')
     if group:
@@ -285,6 +293,7 @@ def get_categories(request):
 
 
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def get_classifications(request):
     group = request.GET.get('group')
     category = request.GET.get('category')
@@ -301,9 +310,292 @@ def get_classifications(request):
 
 # ---- STOCK REORDER CHECK ENDPOINT (used by your Notifications.js) ----
 @api_view(['GET'])
+@permission_classes([HasRolePermission])
 def stock_alerts(request):
     try:
         low_stock = get_low_stock_items()
         return JsonResponse(low_stock, safe=False)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+    
+@api_view(["GET"])
+@permission_classes([HasRolePermission])
+def get_items(request):
+    try:
+        
+        client = MongoClient(mongo_uri)
+        db = client[db_name]               # MongoDB database object
+        items_collection = db["items"]     # MongoDB collection object
+        # Fetch only active items
+        items_cursor = items_collection.find({
+            "$or": [
+                {"is_active": True},
+                {"is_active": {"$exists": False}}
+            ]
+        })
+
+        items = []
+        for item in items_cursor:
+            item_data = {}
+            for key, value in item.items():
+                if isinstance(value, ObjectId):
+                    item_data[key] = str(value)
+                elif isinstance(value, Decimal128):
+                    item_data[key] = float(value.to_decimal())
+                elif isinstance(value, datetime):
+                    item_data[key] = value.isoformat()
+                else:
+                    item_data[key] = value
+            items.append(item_data)
+
+        return Response({"status": "success", "data": items}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"status": "error", "message": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+@api_view(["PATCH"])
+@permission_classes([HasRolePermission])
+def update_item(request, item_id):
+    try:
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        items_collection = db["items"]
+        
+        # Get only the business data, exclude auth fields
+        data = request.data.copy()
+        
+        # Remove _id and all auth-related fields
+        fields_to_remove = ["_id"]
+        auth_fields = [key for key in data.keys() if key.startswith("auth-")]
+        fields_to_remove.extend(auth_fields)
+        
+        for field in fields_to_remove:
+            data.pop(field, None)
+        
+        # Add audit fields directly
+        data["lastmodified_by"] = request.data.get("auth-user-id")
+        data["lastmodified_date"] = datetime.now()
+
+        result = items_collection.update_one(
+            {"_id": ObjectId(item_id)}, 
+            {"$set": data}
+        )
+        
+        if result.matched_count == 0:
+            return Response(
+                {"status": "error", "message": "Item not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        updated_item = items_collection.find_one({"_id": ObjectId(item_id)})
+        
+        # Convert MongoDB types to JSON-serializable types
+        for key, value in updated_item.items():
+            if isinstance(value, ObjectId):
+                updated_item[key] = str(value)
+            elif isinstance(value, Decimal128):
+                updated_item[key] = float(value.to_decimal())
+            elif isinstance(value, datetime):
+                updated_item[key] = value.isoformat()
+
+        return Response(
+            {"status": "success", "data": updated_item}, 
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {"status": "error", "message": str(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(["PATCH"])
+@permission_classes([HasRolePermission])
+def delete_item(request, item_id):
+    try:
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        items_collection = db["items"]
+        
+        result = items_collection.update_one(
+            {"_id": ObjectId(item_id)},
+            {"$set": {
+                "is_active": False,
+                "lastmodified_by": request.data.get("auth-user-id"),
+                "lastmodified_date": datetime.now()
+            }}
+        )
+        
+        if result.matched_count == 0:
+            return Response(
+                {"status": "error", "message": "Item not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        updated_item = items_collection.find_one({"_id": ObjectId(item_id)})
+        
+        # Convert MongoDB types to JSON-serializable types
+        for key, value in updated_item.items():
+            if isinstance(value, ObjectId):
+                updated_item[key] = str(value)
+            elif isinstance(value, Decimal128):
+                updated_item[key] = float(value.to_decimal())
+            elif isinstance(value, datetime):
+                updated_item[key] = value.isoformat()
+
+        return Response(
+            {"status": "success", "data": updated_item, "message": "Item soft-deleted"}, 
+            status=status.HTTP_200_OK
+        )
+        
+    except Exception as e:
+        return Response(
+            {"status": "error", "message": str(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+
+
+@api_view(['GET'])
+@permission_classes([HasRolePermission])
+def get_vendors(request):
+    try:
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        vendors_collection = db["vendors"]
+        # Fetch vendors where is_active is True or not set
+        vendors_cursor = vendors_collection.find({
+            "$or": [
+                {"is_active": True},
+                {"is_active": {"$exists": False}}
+            ]
+        })
+
+        vendors = []
+        for vendor in vendors_cursor:
+            vendor_data = {}
+            for key, value in vendor.items():
+                if isinstance(value, ObjectId):
+                    vendor_data[key] = str(value)
+                elif isinstance(value, Decimal128):
+                    vendor_data[key] = float(value.to_decimal())
+                elif isinstance(value, datetime):
+                    vendor_data[key] = value.isoformat()
+                else:
+                    vendor_data[key] = value
+            vendors.append(vendor_data)
+
+        return Response({"status": "success", "data": vendors}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"status": "error", "message": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# ✅ UPDATE vendor (PATCH)
+@api_view(["PATCH"])
+@permission_classes([HasRolePermission])
+def update_vendor(request, vendor_id):
+    try:
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        vendors_collection = db["vendors"]
+        
+        # Get only the business data, exclude auth fields
+        data = request.data.copy()
+        
+        # Remove _id and all auth-related fields
+        fields_to_remove = ["_id"]
+        auth_fields = [key for key in data.keys() if key.startswith("auth-")]
+        fields_to_remove.extend(auth_fields)
+        
+        for field in fields_to_remove:
+            data.pop(field, None)
+        
+        # Add audit fields directly
+        data["lastmodified_by"] = request.data.get("auth-user-id")
+        data["lastmodified_date"] = datetime.now()
+
+        # Perform the update
+        result = vendors_collection.update_one(
+            {"_id": ObjectId(vendor_id)}, 
+            {"$set": data}
+        )
+
+        # Check if a document was matched
+        if result.matched_count == 0:
+            return Response(
+                {"status": "error", "message": "Vendor not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Fetch the updated document
+        updated_vendor = vendors_collection.find_one({"_id": ObjectId(vendor_id)})
+
+        # Convert ObjectId, Decimal128, datetime inline
+        for key, value in updated_vendor.items():
+            if isinstance(value, ObjectId):
+                updated_vendor[key] = str(value)
+            elif isinstance(value, Decimal128):
+                updated_vendor[key] = float(value.to_decimal())
+            elif isinstance(value, datetime):
+                updated_vendor[key] = value.isoformat()
+
+        return Response(
+            {"status": "success", "data": updated_vendor}, 
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {"status": "error", "message": str(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ✅ Soft DELETE vendor (PATCH)
+@api_view(["PATCH"])
+@permission_classes([HasRolePermission])
+def delete_vendor(request, vendor_id):
+    try:
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        vendors_collection = db["vendors"]
+        
+        # Soft delete: set is_active to False with audit fields
+        result = vendors_collection.update_one(
+            {"_id": ObjectId(vendor_id)},
+            {"$set": {
+                "is_active": False,
+                "lastmodified_by": request.data.get("auth-user-id"),
+                "lastmodified_date": datetime.now()
+            }}
+        )
+
+        if result.matched_count == 0:
+            return Response(
+                {"status": "error", "message": "Vendor not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Fetch updated vendor
+        updated_vendor = vendors_collection.find_one({"_id": ObjectId(vendor_id)})
+
+        # Convert ObjectId, Decimal128, datetime inline
+        for key, value in updated_vendor.items():
+            if isinstance(value, ObjectId):
+                updated_vendor[key] = str(value)
+            elif isinstance(value, Decimal128):
+                updated_vendor[key] = float(value.to_decimal())
+            elif isinstance(value, datetime):
+                updated_vendor[key] = value.isoformat()
+
+        return Response(
+            {"status": "success", "data": updated_vendor, "message": "Vendor soft-deleted"},
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {"status": "error", "message": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

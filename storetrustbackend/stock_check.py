@@ -3,9 +3,13 @@ import json
 import certifi
 import logging
 from pymongo import MongoClient
+from rest_framework.decorators import api_view, permission_classes
+from pyauth.auth import HasRolePermission
 from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 load_dotenv()
+
+@permission_classes([HasRolePermission])
 def get_low_stock_items():
     try:
         # Read env values

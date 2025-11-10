@@ -39,18 +39,6 @@ PAGE_MAPPING = {
     # Traveller's Intent Report:
     r'^/_b_a_c_k_e_n_d/Stores/travellers-stock/?(\?.*)?$':'STR-P-TINR',
 
-
-    
-    
-
-    
-    
-
-    
-    r'^/_b_a_c_k_e_n_d/Stores/add_back_traveller_stock/?(\?.*)?$':'STR-API-ABTS',
-   
-    r'^/_b_a_c_k_e_n_d/Stores/reduce_stock/?(\?.*)?$':'STR-API-RS',
-
 }
 
 

@@ -44,14 +44,4 @@ urlpatterns = [
 
     # Traveller Intent Report:
     path('travellers-stock/', travellerIN.travellers_stock, name='travellers_stock'),
-
-
-    path('item/list/', travellerIN.items_list, name='items_list'),
-    path('items/list/', inventory.list_items, name='list_items'),
-    
-    path('reduce_stock/', travellerIN.reduce_stock, name='reduce_stock'),
-    # path('restore_stock/', travellerIN.restore_stock, name='restore_stock'),
-    # path('add_back_stock/', travellerIN.add_back_stock, name='add_back_stock'),
-    path('add_back_traveller_stock/', travellerIN.add_back_traveller_stock, name='add_back_traveller_stock'),
- 
    ]

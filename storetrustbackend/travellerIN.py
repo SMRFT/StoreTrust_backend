@@ -1650,36 +1650,6 @@ def restore_stock_fifo(item_name, hsn, quantity_to_restore, employee_id):
         print(f"Error in restore_stock_fifo: {e}")
         return False
 
-@api_view(['GET'])
-@permission_classes([HasRolePermission])
-def get_by_hsn(request, hsn):
-    if not isinstance(request, HttpRequest):
-        return Response({"error": "Invalid request object"}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        pipeline = [
-            {"$match": {"is_active": True}},
-            {"$unwind": "$items"},
-            {"$match": {"items.hsn": str(hsn)}},
-            {
-                "$group": {
-                    "_id": "$items.hsn",
-                    "total_stock": {"$sum": {"$toInt": "$items.totalstock"}}
-                }
-            }
-        ]
-        result = purchases_collection.aggregate(pipeline)
-        stock_data = list(result)
-
-        if not stock_data:
-            return Response({"error": f"No data found for HSN {hsn}"}, status=status.HTTP_404_NOT_FOUND)
-
-        return Response({"hsn": hsn, "total_stock": stock_data[0]["total_stock"]}, status=status.HTTP_200_OK)
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
 # -------------------------------------------------------------------
 # Soft Delete Intent Item
 # -------------------------------------------------------------------

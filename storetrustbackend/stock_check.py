@@ -17,11 +17,9 @@ def get_low_stock_items():
         mongo_uri = os.environ.get("GLOBAL_DB_HOST")
         db_name = os.environ.get("STORETRUST_DB_NAME", "StoreTrust")
         # Connect to DB
-        if env_type in ["test", "prod"]:
-            # Usually hosted MongoDB (Atlas, etc.) needs TLS
+        if env_type in ["test", "prod"]:           
             client = MongoClient(mongo_uri)
-        else:
-            # Local / self-hosted IP does not need TLS
+        else:           
             client = MongoClient(mongo_uri)
         db = client[db_name]
         items_collection = db["items"]

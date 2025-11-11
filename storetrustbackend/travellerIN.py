@@ -39,7 +39,7 @@ db_name = os.environ.get("STORETRUST_DB_NAME", "StoreTrust")
 if env_type in ["test", "prod"]:
     client = MongoClient(mongo_uri)
 else:
-    client = MongoClient(mongo_uri, tls=True, tlsCAFile=certifi.where())
+    client = MongoClient(mongo_uri)
     
 
 @csrf_exempt

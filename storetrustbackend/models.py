@@ -31,12 +31,7 @@ class TravellersIN(AuditModel):
     invoice_date = models.DateField()
     credit_period = models.CharField(max_length=50, blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)    
-    payment_mode = models.CharField(max_length=50, choices=[
-        ('CHEQUE', 'CHEQUE'),
-        ('CASH', 'CASH'),
-        ('CARD', 'CARD'),
-        ('UPI', 'UPI'),
-    ], blank=True, null=True)
+    payment_mode = models.CharField(max_length=50, blank=True, null=True)
     
     # Items stored as JSON
     items = models.JSONField(default=list, blank=True)

@@ -27,6 +27,12 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from pymongo import MongoClient
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from pymongo import MongoClient
+from bson.decimal128 import Decimal128
+from bson import json_util
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -94,12 +100,6 @@ def create_vendor(request):
         )
 
 
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from pymongo import MongoClient
-from bson.decimal128 import Decimal128
-from bson import json_util
 
 @api_view(['GET'])
 @permission_classes([HasRolePermission])

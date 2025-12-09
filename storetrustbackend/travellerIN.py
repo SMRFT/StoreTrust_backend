@@ -453,6 +453,7 @@ def delete_grn_record(request):
 @permission_classes([HasRolePermission])
 def update_payment_status(request):
     grn_number = request.query_params.get('grn_number')
+    employee_id = request.data.get('auth-user-id')
     if not grn_number:
         return Response({
             'status': 'error',
@@ -463,16 +464,17 @@ def update_payment_status(request):
     print(f"Attempting to update payment status for GRN: '{grn_number}'")
 
     try:
-        # Validate request data is a dictionary
         data = request.data
         if not isinstance(data, dict):
             return Response({
                 'status': 'error',
-                'message': 'Request body must be a JSON object, not a list or other type'
+                'message': 'Request body must be a JSON object'
             }, status=400)
 
         print("Request data:", data)
-        required_fields = ['amount_paid', 'payment_method', 'payment_details', 'paid_by', 'status']
+        
+        # Updated required fields to include payment_date
+        required_fields = ['amount_paid', 'payment_method', 'payment_date', 'status']
         for field in required_fields:
             if field not in data:
                 return Response({
@@ -501,13 +503,26 @@ def update_payment_status(request):
                 'message': 'Invalid amount_paid value'
             }, status=400)
 
-        # Create payment entry
+        # Validate payment_date (dd/mm/yyyy format)
+        try:
+            payment_date = data['payment_date']
+            from datetime import datetime
+            # Parse dd/mm/yyyy format
+            parsed_date = datetime.strptime(payment_date, '%d/%m/%Y')
+        except (ValueError, TypeError):
+            return Response({
+                'status': 'error',
+                'message': 'Invalid payment_date format. Expected DD/MM/YYYY format'
+            }, status=400)
+
+        # Create payment entry with payment_date
         payment_entry = {
             'status': data['status'],
             'amount_paid': amount_paid,
             'payment_method': data['payment_method'],
             'payment_details': data.get('payment_details'),
-            'paid_by': data['paid_by'],
+            'payment_date': payment_date,  # Add payment_date to entry
+            'paid_by': employee_id,
             'timestamp': timezone.now().isoformat()
         }
 
@@ -529,13 +544,10 @@ def update_payment_status(request):
             try:
                 current_status = json.loads(current_status)
                 if not isinstance(current_status, list):
-                    print(f"Warning: payment_status for GRN {grn_number} is a string but not a valid JSON list")
                     current_status = []
             except json.JSONDecodeError:
-                print(f"Warning: Invalid JSON in payment_status for GRN {grn_number}")
                 current_status = []
         elif not isinstance(current_status, list):
-            print(f"Warning: payment_status for GRN {grn_number} is not a list: {type(current_status)}")
             current_status = []
 
         # Get current total_amount_paid
@@ -568,7 +580,7 @@ def update_payment_status(request):
 
         # Update document
         update_data = {
-            "payment_status": json.dumps(new_status),  # Store as JSON string
+            "payment_status": json.dumps(new_status),
             "total_amount_paid": Decimal128(str(new_total_paid)),
             "lastmodified_date": timezone.now()
         }
@@ -588,7 +600,8 @@ def update_payment_status(request):
                     'pending_amount': pending_amount,
                     'payment_method': payment_entry['payment_method'],
                     'payment_details': payment_entry['payment_details'],
-                    'paid_by': payment_entry['paid_by'],
+                    'payment_date': payment_entry['payment_date'],
+                    'paid_by': employee_id,
                     'timestamp': payment_entry['timestamp']
                 }
             })

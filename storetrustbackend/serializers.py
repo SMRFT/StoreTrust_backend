@@ -18,21 +18,18 @@ class Decimal128Field(serializers.Field):
     def to_internal_value(self, data):
         return Decimal128(str(data))
 
-from rest_framework import serializers
-from .models import Vendor
-
-class VendorSerializer(serializers.ModelSerializer):
-    _id = serializers.CharField(source='id', read_only=True)
-
-    class Meta:
-        model = Vendor
-        fields = ["_id", "name", "contactPerson", "phone", "email"]
-
-
 class TravellersINSerializer(serializers.ModelSerializer):
-    # Handle ObjectId fields properly
     id = serializers.CharField(read_only=True)
-    
+
+    # ── Date fields: accept both date objects and YYYY-MM-DD strings ──────
+    date         = serializers.DateField(required=False, allow_null=True)
+    invoice_date = serializers.DateField(required=False, allow_null=True)
+    due_date     = serializers.DateField(required=False, allow_null=True)
+
+    # ── Audit fields: writable so the view can set them on update ─────────
+    lastmodified_by   = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    lastmodified_date = serializers.DateTimeField(required=False, allow_null=True)
+
     class Meta:
         model = TravellersIN
         fields = [
@@ -40,9 +37,8 @@ class TravellersINSerializer(serializers.ModelSerializer):
             'purchase_category',
             'vendor_id',
             'grn_number',
-            'is_active',
             'payment_status',
-            'date',            
+            'date',
             'invoice_no',
             'invoice_date',
             'credit_period',
@@ -71,17 +67,18 @@ class TravellersINSerializer(serializers.ModelSerializer):
             'lastmodified_by',
             'lastmodified_date',
         ]
-        read_only_fields = ['id', 'created_date', 'lastmodified_date']
+        # created_date is read-only; lastmodified_date is now writable above
+        read_only_fields = ['id', 'created_date']
+
     def to_representation(self, instance):
-        """Convert ObjectId to string for JSON serialization"""
         ret = super().to_representation(instance)
         if isinstance(ret.get('id'), ObjectId):
             ret['id'] = str(ret['id'])
         return ret
-    
+
     def create(self, validated_data):
         return TravellersIN.objects.create(**validated_data)
-    
+
     def update(self, instance, validated_data):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)

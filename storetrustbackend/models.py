@@ -17,9 +17,7 @@ class AuditModel(models.Model):
 class TravellersIN(AuditModel):
     # Add GRN number field
     grn_number = models.CharField(max_length=50, unique=True, blank=True)
-    is_active = models.BooleanField(default=True)
     payment_status = models.JSONField(default=list, blank=True, null=True)
-    total_amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0.0)
     # Basic Information
     purchase_category = models.CharField(max_length=50, choices=[
         ('TRAVELLERS IN CREDIT', 'TRAVELLERS IN CREDIT'),
@@ -114,14 +112,9 @@ class Vendors(AuditModel):
     contactPerson = models.CharField(max_length=255, blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
-    # url = models.URLField(blank=True, null=True)
     kgstTinNumber = models.CharField(max_length=50, blank=True, null=True)
     gstin = models.CharField(max_length=50)
     payment = models.CharField(max_length=50, blank=True, null=True)
-    terms = models.TextField(blank=True, null=True)
-    creditPeriod = models.IntegerField(blank=True, null=True)
-    exportDataCode = models.CharField(max_length=50, blank=True, null=True)
-    tdsPercent = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     class Meta:
         db_table = 'vendors'
@@ -180,6 +173,7 @@ class Vendors(AuditModel):
 
 
 class Items(AuditModel):
+    item_id = models.IntegerField(unique=True, blank=True, null=True)
     itemName = models.CharField(max_length=255)
     group = models.CharField(max_length=100)
     group_type = models.CharField(max_length=50, choices=[
@@ -191,6 +185,7 @@ class Items(AuditModel):
     classification = models.CharField(max_length=50)
     hsn = models.CharField(max_length=20, blank=True, null=True)
     stockReorderLevel = models.CharField(max_length=100)
+    openingStock = models.IntegerField(default=0, blank=True, null=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -201,8 +196,14 @@ class Items(AuditModel):
         return self.itemName
 
     def save(self, *args, **kwargs):
-        if self.pk:  # If updating existing record
+        if self.pk:
+            # Updating existing record
             self.lastmodified_date = timezone.now()
+        else:
+            # Creating new record — auto-assign item_id if not provided
+            if not self.item_id:
+                last_item = Items.objects.order_by('-item_id').first()
+                self.item_id = (last_item.item_id + 1) if last_item and last_item.item_id else 1
         super().save(*args, **kwargs)
 
 
@@ -215,17 +216,7 @@ class TravellerIntent(AuditModel):
     def __str__(self):
         return f"Intent #{self.intent_number}"
 
-class Vendor(models.Model):
-    name = models.CharField(max_length=255)
-    contactPerson = models.CharField(max_length=255)
-    Address = models.CharField(max_length=255)
-    Phone = models.CharField(max_length=20)
-    email = models.EmailField()
 
-    def __str__(self):
-        return self.name
-
-    
 class CollegeIntent(models.Model):
     intent_number = models.CharField(max_length=50, unique=True)
     date = models.DateField(default=timezone.now)

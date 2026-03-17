@@ -37,15 +37,28 @@ from bson import json_util
 logger = logging.getLogger(__name__)
 load_dotenv()
 
-env_type = os.environ.get("ENV_CLASSIFICATION", "local")
-
+env_type  = os.environ.get("ENV_CLASSIFICATION", "local")
 mongo_uri = os.environ.get("GLOBAL_DB_HOST")
-db_name = os.environ.get("STORETRUST_DB_NAME", "StoreTrust")
+db_name   = os.environ.get("STORETRUST_DB_NAME", "StoreTrust")
 
-if env_type in ["test", "prod"]:
-    client = MongoClient(mongo_uri)
-else:
-    client = MongoClient(mongo_uri)
+_mongo_client = MongoClient(mongo_uri)
+db = _mongo_client[db_name]
+
+purchases_collection = db["travellers_in"]
+intents_collection   = db["traveller_intent"]
+items_collection     = db["items"]
+vendors_collection   = db["vendors"]
+
+def clean_mongo_document(doc):
+    if isinstance(doc, dict):
+        return {k: clean_mongo_document(v) for k, v in doc.items()}
+    elif isinstance(doc, list):
+        return [clean_mongo_document(i) for i in doc]
+    elif isinstance(doc, Decimal128):
+        return float(doc.to_decimal())
+    elif isinstance(doc, ObjectId):
+        return str(doc)
+    return doc
 
 @api_view(['POST'])
 @permission_classes([HasRolePermission])
@@ -146,14 +159,6 @@ def list_vendors(request):
         )
 
 
-@api_view(['GET'])
-@permission_classes([HasRolePermission])
-def get_vendor(request, vendor_id):
-    vendor = get_object_or_404(Vendors, id=vendor_id)
-    serializer = VendorsSerializer(vendor)
-    return Response(serializer.data, status=status.HTTP_200_OK)
-
-
 @api_view(['PUT'])
 @permission_classes([HasRolePermission])
 def update_vendor(request, vendor_id):
@@ -219,7 +224,7 @@ def list_items(request):
         # 3️⃣ Fetch only active items
         active_items = list(items_collection.find(
             {"is_active": True},
-            {"_id": 1, "itemName": 1, "hsn": 1}
+            {"_id": 1,"item_id": 1, "itemName": 1, "hsn": 1}
         ))
 
         # 4️⃣ Convert ObjectId to string for JSON
@@ -236,76 +241,99 @@ def list_items(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-@api_view(['GET'])
-@permission_classes([HasRolePermission])
-def get_item(request, item_id):
-    item = get_object_or_404(Items, id=item_id)
-    serializer = ItemsSerializer(item)
-    return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-@api_view(['PUT'])
+@api_view(['PUT', 'PATCH'])
 @permission_classes([HasRolePermission])
 def update_item(request, item_id):
-    item = get_object_or_404(Items, id=item_id)
-    employee_id = request.data.get('auth-user-id')
 
-    serializer = ItemsSerializer(
-        item,
-        data=request.data,
-        context={'employee_id': employee_id},
-        partial=True
+    try:
+        item_id_int = int(item_id)
+    except (ValueError, TypeError):
+        return Response(
+            {"status": "error", "message": f"Invalid item_id: {item_id}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    employee_id = request.data.get("auth-user-id")
+
+    # ── Check item exists in MongoDB ──────────────────────────────────────
+    existing = items_collection.find_one({"item_id": item_id_int})
+    if not existing:
+        return Response(
+            {"status": "error", "message": f"Item not found for item_id={item_id_int}"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    # ── Build update payload ──────────────────────────────────────────────
+    allowed_fields = [
+        "itemName", "group", "group_type", "category", "Category",
+        "classification", "hsn", "stockReorderLevel", "openingStock",
+        "is_active",
+    ]
+
+    update_fields = {}
+    for field in allowed_fields:
+        if field in request.data:
+            update_fields[field] = request.data[field]
+
+    # Coerce openingStock to int
+    if "openingStock" in update_fields:
+        try:
+            update_fields["openingStock"] = int(update_fields["openingStock"])
+        except (ValueError, TypeError):
+            update_fields["openingStock"] = 0
+
+    # Audit fields
+    update_fields["lastmodified_by"]   = str(employee_id)
+    update_fields["lastmodified_date"] = datetime.utcnow()
+
+    # ── Persist to MongoDB ────────────────────────────────────────────────
+    items_collection.update_one(
+        {"item_id": item_id_int},
+        {"$set": update_fields},
     )
 
-    if serializer.is_valid():
-        item_instance = serializer.save(
-            lastmodified_by=employee_id,
-            lastmodified_date=datetime.now()
-        )
-        return Response(ItemsSerializer(item_instance).data, status=status.HTTP_200_OK)
-
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-@api_view(['DELETE'])
-@permission_classes([HasRolePermission])
-def delete_item(request, item_id):
-    item = get_object_or_404(Items, id=item_id)
-    item.delete()
-    return Response({'message': 'Item deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
-
-@permission_classes([HasRolePermission])
-@api_view(['GET'])
-def get_groups(request):
-    groups = Items.objects.values_list('group', flat=True).distinct().order_by('group')
-    return Response(list(groups), status=status.HTTP_200_OK)
+    # ── Return updated document ───────────────────────────────────────────
+    updated_doc = items_collection.find_one({"item_id": item_id_int})
+    return Response(
+        {
+            "status":  "success",
+            "message": "Item updated successfully",
+            "data":    clean_mongo_document(updated_doc),
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(['GET'])
 @permission_classes([HasRolePermission])
-def get_categories(request):
-    group = request.GET.get('group')
-    if group:
-        categories = Items.objects.filter(group=group).values_list('category', flat=True).distinct().order_by('category')
-    else:
-        categories = Items.objects.values_list('category', flat=True).distinct().order_by('category')
-    return Response(list(categories), status=status.HTTP_200_OK)
+def get_item_dropdowns(request):
+    """
+    Returns all groups, categories, classifications in one call.
+    Each entry is scoped so frontend can filter client-side.
+    """
+    # All unique groups
+    groups = list(
+        Items.objects.values_list('group', flat=True)
+        .distinct().order_by('group')
+    )
 
+    # All unique categories with their group — for client-side filtering
+    categories = list(
+        Items.objects.values('group', 'category')
+        .distinct().order_by('category')
+    )
 
-@api_view(['GET'])
-@permission_classes([HasRolePermission])
-def get_classifications(request):
-    group = request.GET.get('group')
-    category = request.GET.get('category')
+    # All unique classifications with group + category — for client-side filtering
+    classifications = list(
+        Items.objects.values('group', 'category', 'classification')
+        .distinct().order_by('classification')
+    )
 
-    queryset = Items.objects.all()
-    if group:
-        queryset = queryset.filter(group=group)
-    if category:
-        queryset = queryset.filter(category=category)
-
-    classifications = queryset.values_list('classification', flat=True).distinct().order_by('classification')
-    return Response(list(classifications), status=status.HTTP_200_OK)
+    return Response({
+        'groups':          groups,
+        'categories':      categories,
+        'classifications': classifications,
+    }, status=status.HTTP_200_OK)
 
 
 # ---- STOCK REORDER CHECK ENDPOINT (used by your Notifications.js) ----
@@ -317,6 +345,7 @@ def stock_alerts(request):
         return JsonResponse(low_stock, safe=False)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+    
     
 @api_view(["GET"])
 @permission_classes([HasRolePermission])
@@ -353,108 +382,42 @@ def get_items(request):
     except Exception as e:
         return Response({"status": "error", "message": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-@api_view(["PATCH"])
-@permission_classes([HasRolePermission])
-def update_item(request, item_id):
-    try:
-        client = MongoClient(mongo_uri)
-        db = client[db_name]
-        items_collection = db["items"]
-        
-        # Get only the business data, exclude auth fields
-        data = request.data.copy()
-        
-        # Remove _id and all auth-related fields
-        fields_to_remove = ["_id"]
-        auth_fields = [key for key in data.keys() if key.startswith("auth-")]
-        fields_to_remove.extend(auth_fields)
-        
-        for field in fields_to_remove:
-            data.pop(field, None)
-        
-        # Add audit fields directly
-        data["lastmodified_by"] = request.data.get("auth-user-id")
-        data["lastmodified_date"] = datetime.now()
-
-        result = items_collection.update_one(
-            {"_id": ObjectId(item_id)}, 
-            {"$set": data}
-        )
-        
-        if result.matched_count == 0:
-            return Response(
-                {"status": "error", "message": "Item not found"}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        updated_item = items_collection.find_one({"_id": ObjectId(item_id)})
-        
-        # Convert MongoDB types to JSON-serializable types
-        for key, value in updated_item.items():
-            if isinstance(value, ObjectId):
-                updated_item[key] = str(value)
-            elif isinstance(value, Decimal128):
-                updated_item[key] = float(value.to_decimal())
-            elif isinstance(value, datetime):
-                updated_item[key] = value.isoformat()
-
-        return Response(
-            {"status": "success", "data": updated_item}, 
-            status=status.HTTP_200_OK
-        )
-
-    except Exception as e:
-        return Response(
-            {"status": "error", "message": str(e)}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
 
 @api_view(["PATCH"])
 @permission_classes([HasRolePermission])
 def delete_item(request, item_id):
     try:
-        client = MongoClient(mongo_uri)
-        db = client[db_name]
-        items_collection = db["items"]
-        
-        result = items_collection.update_one(
-            {"_id": ObjectId(item_id)},
-            {"$set": {
-                "is_active": False,
-                "lastmodified_by": request.data.get("auth-user-id"),
-                "lastmodified_date": datetime.now()
-            }}
-        )
-        
-        if result.matched_count == 0:
-            return Response(
-                {"status": "error", "message": "Item not found"}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        updated_item = items_collection.find_one({"_id": ObjectId(item_id)})
-        
-        # Convert MongoDB types to JSON-serializable types
-        for key, value in updated_item.items():
-            if isinstance(value, ObjectId):
-                updated_item[key] = str(value)
-            elif isinstance(value, Decimal128):
-                updated_item[key] = float(value.to_decimal())
-            elif isinstance(value, datetime):
-                updated_item[key] = value.isoformat()
-
+        item_id_int = int(item_id)
+    except (ValueError, TypeError):
         return Response(
-            {"status": "success", "data": updated_item, "message": "Item soft-deleted"}, 
-            status=status.HTTP_200_OK
+            {"status": "error", "message": f"Invalid item_id: {item_id}"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
-        
-    except Exception as e:
+
+    result = items_collection.update_one(
+        {"item_id": item_id_int},
+        {"$set": {
+            "is_active":          False,
+            "lastmodified_by":    request.data.get("auth-user-id"),
+            "lastmodified_date":  datetime.utcnow(),
+        }}
+    )
+
+    if result.matched_count == 0:
         return Response(
-            {"status": "error", "message": str(e)}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            {"status": "error", "message": "Item not found"},
+            status=status.HTTP_404_NOT_FOUND,
         )
-    
+
+    updated_doc = items_collection.find_one({"item_id": item_id_int})
+    return Response(
+        {
+            "status":  "success",
+            "message": "Item soft-deleted",
+            "data":    clean_mongo_document(updated_doc),
+        },
+        status=status.HTTP_200_OK,
+    )   
 
 
 @api_view(['GET'])

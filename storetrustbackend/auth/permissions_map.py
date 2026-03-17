@@ -9,9 +9,7 @@ PAGE_MAPPING = {
     # Items:
     '/_b_a_c_k_e_n_d/Stores/items/' : 'STR-API-IL',
     r'^/_b_a_c_k_e_n_d/Stores/items/list/?(\?.*)?$' : 'STR-API-IL',
-    '/_b_a_c_k_e_n_d/Stores/items/groups/' : 'STR-API-IL',
-    r'^/_b_a_c_k_e_n_d/Stores/items/categories/?(\?.*)?$' : 'STR-API-IL',
-    r'^/_b_a_c_k_e_n_d/Stores/items/classifications/?(\?.*)?$' : 'STR-API-IL',
+    '/_b_a_c_k_e_n_d/Stores/items/dropdowns/' : 'STR-API-IL',
     '/_b_a_c_k_e_n_d/Stores/get_items/' : 'STR-API-IL',
     r'^/_b_a_c_k_e_n_d/Stores/update_item(?:/[^/]+)+/$' : 'STR-API-IL',
     r'^/_b_a_c_k_e_n_d/Stores/delete_item(?:/[^/]+)+/$' : 'STR-API-IL',

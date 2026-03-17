@@ -21,7 +21,7 @@
 # # ------------------- MongoDB Setup -------------------
 # env_type = os.environ.get("ENV_CLASSIFICATION", "local")
 # mongo_uri = os.environ.get("GLOBAL_DB_HOST")
-# db_name = os.environ.get("STORETRUST_DB_NAME", "StoreTrust")
+# db_name = os.environ.get("GLOBAL_DB_NAME", "StoreTrust")
 
 # if env_type in ["test", "prod"]:
 #     client = MongoClient(mongo_uri)

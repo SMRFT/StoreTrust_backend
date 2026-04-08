@@ -19,7 +19,7 @@ class Decimal128Field(serializers.Field):
         return Decimal128(str(data))
 
 class TravellersINSerializer(serializers.ModelSerializer):
-    id = serializers.CharField(read_only=True)
+    grn_id = serializers.IntegerField(read_only=True)
 
     # ── Date fields: accept both date objects and YYYY-MM-DD strings ──────
     date         = serializers.DateField(required=False, allow_null=True)
@@ -33,7 +33,7 @@ class TravellersINSerializer(serializers.ModelSerializer):
     class Meta:
         model = TravellersIN
         fields = [
-            'id',
+            'grn_id',
             'purchase_category',
             'vendor_id',
             'grn_number',
@@ -68,7 +68,7 @@ class TravellersINSerializer(serializers.ModelSerializer):
             'lastmodified_date',
         ]
         # created_date is read-only; lastmodified_date is now writable above
-        read_only_fields = ['id', 'created_date']
+        read_only_fields = ['grn_id', 'created_date']
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)

@@ -527,6 +527,7 @@ def get_travellers_in_list(request):
 
                 item_data = {
                     'id':                str(getattr(obj, '_id', None)),
+                    'grn_id':            getattr(obj, 'grn_id', None),
                     'grn_number':        getattr(obj, 'grn_number', None),
                     'vendor_id':         getattr(obj, 'vendor_id', None),
                     **vendor_details,
@@ -605,11 +606,21 @@ def get_travellers_in_list(request):
 def update_payment_status(request):
     """Record a full payment for a GRN — status is always 'Paid'."""
     grn_number  = request.query_params.get('grn_number')
+    grn_id = request.query_params.get('grn_id')
     employee_id = request.data.get('auth-user-id')
 
     if not grn_number:
         return Response(
             {'status': 'error', 'message': 'Missing grn_number in query parameters'},
+            status=400,
+        )
+    
+    if not grn_number or not grn_id:
+        return Response(
+            {
+                'status': 'error',
+                'message': 'Missing grn_number or grn_id in query parameters'
+            },
             status=400,
         )
 
@@ -648,7 +659,10 @@ def update_payment_status(request):
                 status=400,
             )
 
-        current_doc = purchases_collection.find_one({"grn_number": grn_number})
+        current_doc = purchases_collection.find_one({
+    "grn_number": grn_number,
+    "grn_id": int(grn_id)
+})
         if not current_doc:
             return Response(
                 {
@@ -703,16 +717,19 @@ def update_payment_status(request):
             new_status = current_status + [payment_entry]
 
         result = purchases_collection.update_one(
-            {"grn_number": grn_number},
-            {
-                "$set": {
-                    "payment_status":         json.dumps(new_status),
-                    "overall_payment_status": "Paid",
-                    "lastmodified_date":      timezone.now(),
-                    "lastmodified_by":        employee_id or 'Anonymous',
-                }
-            },
-        )
+    {
+        "grn_number": grn_number,
+        "grn_id": int(grn_id)
+    },
+    {
+        "$set": {
+            "payment_status": json.dumps(new_status),
+            "overall_payment_status": "Paid",
+            "lastmodified_date": timezone.now(),
+            "lastmodified_by": employee_id or 'Anonymous',
+        }
+    },
+)
 
         if result.matched_count >= 1:
             return Response({
@@ -742,10 +759,10 @@ def update_payment_status(request):
 
 @api_view(['PATCH'])
 @permission_classes([HasRolePermission])
-def travellers_in_update(request, grn_number):
+def travellers_in_update(request, grn_number, grn_id):
     """Update an existing TravellersIN record by GRN number."""
     try:
-        document = purchases_collection.find_one({"grn_number": grn_number})
+        document = purchases_collection.find_one({"grn_number": grn_number,"grn_id": int(grn_id)})
         if not document:
             return Response(
                 {'status': 'error', 'message': f'No record found for GRN {grn_number}'},
@@ -894,13 +911,18 @@ def travellers_in_update(request, grn_number):
 
         # ── Persist — match only by grn_number ───────────────────────────
         result = purchases_collection.update_one(
-            {"grn_number": grn_number},
-            {"$set": update_data},
-            upsert=False,
-        )
-
+    {
+        "grn_number": grn_number,
+        "grn_id": int(grn_id)
+    },
+    {"$set": update_data},
+    upsert=False,
+)
         if result.matched_count >= 1:
-            updated_doc = purchases_collection.find_one({"grn_number": grn_number})
+            updated_doc = purchases_collection.find_one({
+    "grn_number": grn_number,
+    "grn_id": int(grn_id)
+})
             return Response({
                 'status':  'success',
                 'message': f'TravellersIN record {grn_number} updated successfully',

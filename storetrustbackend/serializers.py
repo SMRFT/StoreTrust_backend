@@ -20,6 +20,13 @@ class Decimal128Field(serializers.Field):
 
 class TravellersINSerializer(serializers.ModelSerializer):
 
+    date = serializers.DateField(required=False, allow_null=True)
+    invoice_date = serializers.DateField(required=False, allow_null=True)
+    due_date = serializers.DateField(required=False, allow_null=True)
+
+    lastmodified_by = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    lastmodified_date = serializers.DateTimeField(required=False, allow_null=True)
+
     class Meta:
         model = TravellersIN
         fields = '__all__'
@@ -28,6 +35,12 @@ class TravellersINSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         ret = super().to_representation(instance)
 
+        # 🔥 Convert ObjectId everywhere
+        for key, value in ret.items():
+            if isinstance(value, ObjectId):
+                ret[key] = str(value)
+
+        # 🔥 Handle Mongo _id explicitly
         if hasattr(instance, '_id') and isinstance(instance._id, ObjectId):
             ret['_id'] = str(instance._id)
 

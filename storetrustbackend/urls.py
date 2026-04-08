@@ -8,7 +8,7 @@ urlpatterns = [
     path('travellers-in/list/', travellerIN.get_travellers_in_list, name='get_travellers_in_list'),    
     path('travellers-in/update-payment-status/', travellerIN.update_payment_status, name='update_payment_status'),
     path('travellers-in/previous-purchases/', travellerIN.get_previous_purchases, name='previous_purchases'),
-    re_path(r'^travellers-in/update/(?P<grn_number>.+)/$', travellerIN.travellers_in_update, name='travellers_in_update'),
+    re_path(r'^travellers-in/update/(?P<grn_number>.+)/(?P<grn_id>\d+)/$', travellerIN.travellers_in_update, name='travellers_in_update'),
 
     # TravellersIN Intent:
     path('travellers-intent/', travellerIN.travellers_intent, name='travellers_intent'),

@@ -16,7 +16,8 @@ class AuditModel(models.Model):
 
 class TravellersIN(AuditModel):
     # Add GRN number field
-    grn_number = models.CharField(max_length=50, unique=True, blank=True)
+    grn_id = models.AutoField(primary_key=True)
+    grn_number = models.CharField(max_length=50, unique=True)
     payment_status = models.JSONField(default=list, blank=True, null=True)
     # Basic Information
     purchase_category = models.CharField(max_length=50, choices=[

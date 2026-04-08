@@ -111,6 +111,7 @@ class TravellersIN(AuditModel):
 
         super().save(*args, **kwargs)
 
+
 class Vendors(AuditModel):
     supplierType = models.CharField(max_length=50, blank=True, null=True)
     vendor_id = models.CharField(max_length=50, unique=True, blank=True, null=True)

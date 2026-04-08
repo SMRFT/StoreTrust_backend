@@ -70,34 +70,44 @@ class TravellersIN(AuditModel):
             return f"{(today.year - 1) % 100}{today.year % 100}"
     
     @staticmethod
-    def generate_grn_number():
-        """Generate the next GRN number for the current financial year"""
+    def generate_grn_number(purchase_category):
+        """
+        Same GRN format: 2526/000001
+
+        But maintain separate running sequence for each purchase_category:
+        - TRAVELLERS IN CREDIT => 2526/000001, 2526/000002 ...
+        - TRAVELLERS IN CASH   => 2526/000001, 2526/000002 ...
+        """
         with transaction.atomic():
             current_fy_prefix = TravellersIN.get_financial_year_prefix()
-            
-            # Get the last GRN number for the current financial year
-            last_record = TravellersIN.objects.filter(
-                grn_number__startswith=f"{current_fy_prefix}/"
-            ).order_by('-grn_number').first()
-            
+
+            # Get last record only for this purchase category + FY
+            last_record = (
+                TravellersIN.objects
+                .select_for_update()
+                .filter(
+                    purchase_category=purchase_category,
+                    grn_number__startswith=f"{current_fy_prefix}/"
+                )
+                .order_by('-grn_number')
+                .first()
+            )
+
             if last_record:
-                # Extract the sequence number from the last GRN
                 last_sequence = int(last_record.grn_number.split('/')[1])
                 next_sequence = last_sequence + 1
             else:
-                # First record for this financial year
                 next_sequence = 1
-            
-            # Format: YYMM/XXXXXX (e.g., 2526/000001)
+
             return f"{current_fy_prefix}/{next_sequence:06d}"
-    
-    def save(self, *args, **kwargs):
-        # Generate GRN number if it's a new record
-        if not self.pk and not self.grn_number:
-            self.grn_number = self.generate_grn_number()
         
+    def save(self, *args, **kwargs):
+        if not self.pk and not self.grn_number:
+            self.grn_number = self.generate_grn_number(self.purchase_category)
+
         if self.pk:
             self.lastmodified_date = timezone.now()
+
         super().save(*args, **kwargs)
 
 class Vendors(AuditModel):

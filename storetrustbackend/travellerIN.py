@@ -294,84 +294,106 @@ def add_back_traveller_stock(request):
         return Response({"success": False, "error": str(e)}, status=500)
 
 
-@csrf_exempt
+# 🔥 Utility to clean ObjectId
+def clean_object_ids(data):
+    if isinstance(data, dict):
+        return {k: clean_object_ids(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [clean_object_ids(i) for i in data]
+    elif isinstance(data, ObjectId):
+        return str(data)
+    return data
+
+
 @api_view(['POST'])
 @permission_classes([HasRolePermission])
 def create_travellers_in(request):
-    """Create a new TravellersIN record with an auto-generated GRN number."""
     try:
         data = request.data
 
         mapped_data = {
             'purchase_category': data.get('purchaseCategory'),
-            'vendor_id':         data.get('vendor_id'),
-            'date':              data.get('date'),
-            'invoice_no':        data.get('invoiceNo'),
-            'invoice_date':      data.get('invoiceDate'),
-            'credit_period':     data.get('creditPeriod'),
-            'due_date':          data.get('dueDate'),
-            'payment_mode':      data.get('paymentMode'),
-            'items':             data.get('items', []),
+            'vendor_id': data.get('vendor_id'),
+            'date': data.get('date'),
+            'invoice_no': data.get('invoiceNo'),
+            'invoice_date': data.get('invoiceDate'),
+            'credit_period': data.get('creditPeriod'),
+            'due_date': data.get('dueDate'),
+            'payment_mode': data.get('paymentMode'),
         }
 
+        # 🔥 Clean items (important)
+        items = data.get('items', [])
+        mapped_data['items'] = clean_object_ids(items)
+
+        # Summary mapping
         summary = data.get('summary', {})
         summary_mapping = {
-            'non_taxable_amount':       'nonTaxableAmount',
-            'taxable_amount':           'taxableAmount',
-            'tax_paid_to_supplier':     'taxPaidToSupplier',
-            'local_tax':                'localTax',
-            'remarks':                  'remarks',
-            'cgst':                     'cgst',
-            'sgst':                     'sgst',
-            'igst':                     'igst',
-            'cess':                     'cess',
-            'central_sales_tax':        'centralSalesTax',
-            'round_amount':             'roundAmount',
-            'total_amount':             'totalAmount',
-            'tax_on_free_items':        'taxOnFreeItems',
-            'total_discount':           'totalDiscount',
-            'net_invoice_amount':       'netInvoiceAmount',
-            'quotation_rate':           'quotationRate',
+            'non_taxable_amount': 'nonTaxableAmount',
+            'taxable_amount': 'taxableAmount',
+            'tax_paid_to_supplier': 'taxPaidToSupplier',
+            'local_tax': 'localTax',
+            'remarks': 'remarks',
+            'cgst': 'cgst',
+            'sgst': 'sgst',
+            'igst': 'igst',
+            'cess': 'cess',
+            'central_sales_tax': 'centralSalesTax',
+            'round_amount': 'roundAmount',
+            'total_amount': 'totalAmount',
+            'tax_on_free_items': 'taxOnFreeItems',
+            'total_discount': 'totalDiscount',
+            'net_invoice_amount': 'netInvoiceAmount',
+            'quotation_rate': 'quotationRate',
             'courier_transport_charge': 'courierTransportCharge',
         }
-        for backend_field, frontend_field in summary_mapping.items():
-            mapped_data[backend_field] = summary.get(frontend_field, 0)
 
+        for backend_field, frontend_field in summary_mapping.items():
+            value = summary.get(frontend_field, 0)
+            mapped_data[backend_field] = float(value) if value not in ["", None] else 0
+
+        # Audit
         employee_id = data.get('auth-user-id')
         mapped_data['created_by'] = employee_id if employee_id else 'Anonymous'
-        mapped_data['is_active']  = True
+        mapped_data['is_active'] = True
 
+        # Payment status
         net_invoice_amount = float(mapped_data.get('net_invoice_amount', 0))
         mapped_data['payment_status'] = [{
-            'status':          'Not Paid',
-            'amount_paid':     0.0,
-            'pending_amount':  net_invoice_amount,
-            'payment_method':  None,
+            'status': 'Not Paid',
+            'amount_paid': 0.0,
+            'pending_amount': net_invoice_amount,
+            'payment_method': None,
             'payment_details': None,
-            'paid_by':         None,
+            'paid_by': None,
         }]
         mapped_data['overall_payment_status'] = 'Not Paid'
 
         serializer = TravellersINSerializer(data=mapped_data)
+
         if serializer.is_valid():
             travellers_in = serializer.save()
-            update_stock_by_hsn(mapped_data['items'])
+
+            # 🔥 IMPORTANT: use serializer.data (not re-serialize)
             return JsonResponse({
-                'status':     'success',
-                'message':    'TravellersIN record created successfully',
+                'status': 'success',
+                'message': 'TravellersIN record created successfully',
                 'grn_number': travellers_in.grn_number,
-                'data':       TravellersINSerializer(travellers_in).data,
+                'data': serializer.data
             }, status=201)
+
         else:
             return JsonResponse({
-                'status':  'error',
+                'status': 'error',
                 'message': 'Validation failed',
-                'errors':  serializer.errors,
+                'errors': serializer.errors,
             }, status=400)
 
     except Exception as e:
-        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
 
 @api_view(['GET'])
 @permission_classes([HasRolePermission])

@@ -19,31 +19,62 @@ class Decimal128Field(serializers.Field):
         return Decimal128(str(data))
 
 class TravellersINSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
 
-    date = serializers.DateField(required=False, allow_null=True)
+    # ── Date fields: accept both date objects and YYYY-MM-DD strings ──────
+    date         = serializers.DateField(required=False, allow_null=True)
     invoice_date = serializers.DateField(required=False, allow_null=True)
-    due_date = serializers.DateField(required=False, allow_null=True)
+    due_date     = serializers.DateField(required=False, allow_null=True)
 
-    lastmodified_by = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    # ── Audit fields: writable so the view can set them on update ─────────
+    lastmodified_by   = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     lastmodified_date = serializers.DateTimeField(required=False, allow_null=True)
 
     class Meta:
         model = TravellersIN
-        fields = '__all__'
-        read_only_fields = ['grn_id', 'created_date', 'grn_number']
+        fields = [
+            'id',
+            'grn_id',
+            'purchase_category',
+            'vendor_id',
+            'grn_number',
+            'payment_status',
+            'date',
+            'invoice_no',
+            'invoice_date',
+            'credit_period',
+            'due_date',
+            'payment_mode',
+            'items',
+            'non_taxable_amount',
+            'taxable_amount',
+            'tax_paid_to_supplier',
+            'local_tax',
+            'remarks',
+            'cgst',
+            'sgst',
+            'igst',
+            'cess',
+            'central_sales_tax',
+            'round_amount',
+            'total_amount',
+            'tax_on_free_items',
+            'total_discount',
+            'net_invoice_amount',
+            'quotation_rate',
+            'courier_transport_charge',
+            'created_by',
+            'created_date',
+            'lastmodified_by',
+            'lastmodified_date',
+        ]
+        # created_date is read-only; lastmodified_date is now writable above
+        read_only_fields = ['id', 'created_date']
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
-
-        # 🔥 Convert ObjectId everywhere
-        for key, value in ret.items():
-            if isinstance(value, ObjectId):
-                ret[key] = str(value)
-
-        # 🔥 Handle Mongo _id explicitly
-        if hasattr(instance, '_id') and isinstance(instance._id, ObjectId):
-            ret['_id'] = str(instance._id)
-
+        if isinstance(ret.get('id'), ObjectId):
+            ret['id'] = str(ret['id'])
         return ret
 
     def create(self, validated_data):
@@ -53,7 +84,8 @@ class TravellersINSerializer(serializers.ModelSerializer):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
-        return instance 
+        return instance
+    
 
 class ObjectIdField(serializers.Field):
     def to_representation(self, value):

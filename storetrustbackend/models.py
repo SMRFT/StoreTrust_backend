@@ -16,7 +16,7 @@ class AuditModel(models.Model):
 
 
 class TravellersIN(AuditModel):
-    grn_id = models.AutoField(primary_key=True)
+    grn_id = models.IntegerField(unique=True, null=True, blank=True)
     grn_number = models.CharField(max_length=50, unique=True, null=True)
 
     payment_status = models.JSONField(default=list, blank=True, null=True)
@@ -94,9 +94,17 @@ class TravellersIN(AuditModel):
                 next_seq = 1
 
             return f"{prefix}/{next_seq:06d}"
+        
+    @staticmethod
+    def generate_grn_id():
+        last = TravellersIN.objects.order_by('-grn_id').first()
+        return (last.grn_id + 1) if last and last.grn_id else 1
 
     def save(self, *args, **kwargs):
-        if not self.pk and not self.grn_number:
+        if not self.grn_id:
+            self.grn_id = self.generate_grn_id()
+
+        if not self.grn_number:
             self.grn_number = self.generate_grn_number(self.purchase_category)
 
         if self.pk:

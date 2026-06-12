@@ -626,23 +626,14 @@ def get_travellers_in_list(request):
 @api_view(['PATCH'])
 @permission_classes([HasRolePermission])
 def update_payment_status(request):
-    """Record a full payment for a GRN — status is always 'Paid'."""
-    grn_number  = request.query_params.get('grn_number')
-    grn_id = request.query_params.get('grn_id')
+    """Record a single full payment for a GRN — replaces any existing payment_status."""
+    grn_number = request.query_params.get('grn_number')
+    grn_id     = request.query_params.get('grn_id')
     employee_id = request.data.get('auth-user-id')
 
-    if not grn_number:
-        return Response(
-            {'status': 'error', 'message': 'Missing grn_number in query parameters'},
-            status=400,
-        )
-    
     if not grn_number or not grn_id:
         return Response(
-            {
-                'status': 'error',
-                'message': 'Missing grn_number or grn_id in query parameters'
-            },
+            {'status': 'error', 'message': 'Missing grn_number or grn_id in query parameters'},
             status=400,
         )
 
@@ -674,95 +665,79 @@ def update_payment_status(request):
             datetime.strptime(payment_date, '%d/%m/%Y')
         except (ValueError, TypeError):
             return Response(
-                {
-                    'status':  'error',
-                    'message': 'Invalid payment_date format. Expected DD/MM/YYYY',
-                },
+                {'status': 'error', 'message': 'Invalid payment_date format. Expected DD/MM/YYYY'},
                 status=400,
             )
 
         current_doc = purchases_collection.find_one({
-    "grn_number": grn_number,
-    "grn_id": int(grn_id)
-})
+            "grn_number": grn_number,
+            "grn_id": int(grn_id)
+        })
         if not current_doc:
             return Response(
-                {
-                    'status':  'error',
-                    'message': f'No record found for GRN {grn_number}',
-                },
+                {'status': 'error', 'message': f'No record found for GRN {grn_number}'},
                 status=404,
             )
 
-        raw_ps = current_doc.get('payment_status', [])
-        if isinstance(raw_ps, str):
-            try:
-                current_status = json.loads(raw_ps)
-                if not isinstance(current_status, list):
-                    current_status = []
-            except json.JSONDecodeError:
-                current_status = []
-        elif isinstance(raw_ps, list):
-            current_status = raw_ps
-        else:
-            current_status = []
+        # ── Block re-payment if already paid ──────────────────────────────
+        if current_doc.get('overall_payment_status') == 'Paid':
+            return Response(
+                {'status': 'error', 'message': f'GRN {grn_number} is already fully paid'},
+                status=400,
+            )
 
-        total_amount  = convert_decimal128_to_float(current_doc.get('total_amount', 0))
-        already_paid  = convert_decimal128_to_float(current_doc.get('total_amount_paid', 0))
-        amount_paid   = round(max(0.0, total_amount - already_paid), 2)
-        pending_after = 0.0
+        # ── Use net_invoice_amount (after round-off) as the amount paid ───
+        amount_paid = round(
+            convert_decimal128_to_float(
+                current_doc.get('net_invoice_amount') or current_doc.get('total_amount', 0)
+            ),
+            2,
+        )
 
+        # ── Build a single payment entry (replaces entire payment_status) ─
         payment_entry = {
             'status':          'Paid',
             'amount_paid':     amount_paid,
+            'pending_amount':  0.0,
             'payment_method':  data['payment_method'],
             'payment_details': (
                 None if data['payment_method'] == 'Cash'
                 else data.get('payment_details')
             ),
             'payment_date':    payment_date,
-            'pending_amount':  pending_after,
             'paid_by':         employee_id,
             'timestamp':       timezone.now().isoformat(),
         }
 
-        patched    = False
-        new_status = []
-        for entry in current_status:
-            if not patched and entry.get('status') == 'Not Paid':
-                new_status.append({**entry, **payment_entry})
-                patched = True
-            else:
-                new_status.append(entry)
-
-        if not patched:
-            new_status = current_status + [payment_entry]
-
         result = purchases_collection.update_one(
-    {
-        "grn_number": grn_number,
-        "grn_id": int(grn_id)
-    },
-    {
-        "$set": {
-            "payment_status": json.dumps(new_status),
-            "overall_payment_status": "Paid",
-            "lastmodified_date": timezone.now(),
-            "lastmodified_by": employee_id or 'Anonymous',
-        }
-    },
-)
+            {
+                "grn_number": grn_number,
+                "grn_id": int(grn_id)
+            },
+            {
+                "$set": {
+                    # Overwrite entirely — single payment, no history list
+                    "payment_status":         json.dumps([payment_entry]),
+                    "overall_payment_status": "Paid",
+                    "total_amount_paid":      amount_paid,
+                    "pending_amount":         0.0,
+                    "lastmodified_date":      timezone.now(),
+                    "lastmodified_by":        employee_id or 'Anonymous',
+                }
+            },
+        )
 
         if result.matched_count >= 1:
             return Response({
                 'status':  'success',
                 'message': f'Payment recorded for GRN {grn_number}',
                 'data': {
-                    'pending_amount':  pending_after,
-                    'payment_method':  payment_entry['payment_method'],
-                    'payment_date':    payment_entry['payment_date'],
-                    'paid_by':         employee_id,
-                    'timestamp':       payment_entry['timestamp'],
+                    'amount_paid':    amount_paid,
+                    'pending_amount': 0.0,
+                    'payment_method': payment_entry['payment_method'],
+                    'payment_date':   payment_entry['payment_date'],
+                    'paid_by':        employee_id,
+                    'timestamp':      payment_entry['timestamp'],
                 },
             })
 
@@ -1082,13 +1057,40 @@ def travellers_stock(request):
         })
     except Exception as e:
         return JsonResponse({"success": False, "error": str(e)}, status=500)
+    
 @api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([HasRolePermission])
 def travellers_intent(request):
 
     # ── GET ───────────────────────────────────────────────────────────────────
     if request.method == 'GET':
-        intents    = TravellerIntent.objects.all()
+        intents = TravellerIntent.objects.all()
+
+        # ── Date filtering ────────────────────────────────────────────────────
+        from_date_str = request.query_params.get('from_date')
+        to_date_str   = request.query_params.get('to_date')
+
+        if from_date_str:
+            try:
+                from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+                intents = intents.filter(date__gte=from_date)
+            except ValueError:
+                return Response(
+                    {'error': 'Invalid from_date format. Expected YYYY-MM-DD.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if to_date_str:
+            try:
+                to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
+                intents = intents.filter(date__lte=to_date)
+            except ValueError:
+                return Response(
+                    {'error': 'Invalid to_date format. Expected YYYY-MM-DD.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        # ─────────────────────────────────────────────────────────────────────
+
         serializer = TravellerIntentSerializer(intents, many=True)
         data       = serializer.data
 
@@ -1228,7 +1230,6 @@ def travellers_intent(request):
 @api_view(["PATCH"])
 @permission_classes([HasRolePermission])
 def update_intent_item(request):
-    """Approve, partially approve, or reject individual items within a TravellerIntent."""
     intent_number = request.data.get("intent_number")
     date_str      = request.data.get("date")
     items_updates = request.data.get("items", [])
@@ -1247,16 +1248,31 @@ def update_intent_item(request):
     except TravellerIntent.DoesNotExist:
         return Response({"error": "Intent not found"}, status=404)
 
+    # ── Always unwrap to a plain list, no matter how many times it was stringified ──
     items = intent.items
-    if isinstance(items, str):
-        items = json.loads(items)
+    while isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except (json.JSONDecodeError, ValueError):
+            break
+    if not isinstance(items, list):
+        items = []
+    # ─────────────────────────────────────────────────────────────────────────────
 
     total_stock_reduced = 0
     restored_quantities = []
 
+    # ── Normalise status values coming from frontend ──────────────────────────
+    STATUS_MAP = {
+        "Approve":           "Approved",
+        "Partially Approve": "Partially Approved",
+        "Reject":            "Rejected",
+    }
+
     for update in items_updates:
         item_id      = update.get("item_id")
-        new_status   = update.get("status")
+        raw_status   = update.get("status")
+        new_status   = STATUS_MAP.get(raw_status, raw_status)   # ← normalise here
         new_quantity = update.get("quantity")
         approved_qty = update.get("approved_qty", None)
 
@@ -1266,7 +1282,6 @@ def update_intent_item(request):
 
             previous_approved = int(item.get("approved") or 0)
 
-            # Resolve itemName from Items model — ignore any name from request
             resolved_name = get_item_name_by_id(item.get("item_id"))
             if resolved_name:
                 item["itemName"] = resolved_name
@@ -1274,11 +1289,11 @@ def update_intent_item(request):
             if new_quantity is not None:
                 item["quantity"] = int(new_quantity)
             if new_status is not None:
-                item["status"] = new_status
+                item["status"] = new_status      # stored as "Approved" / "Rejected" etc.
 
             stock_to_reduce = 0
 
-            if new_status in ["Approve", "Partially Approve"]:
+            if new_status in ["Approved", "Partially Approved"]:
                 new_approved        = (
                     int(approved_qty) if approved_qty is not None
                     else int(item.get("quantity") or 0)
@@ -1287,7 +1302,7 @@ def update_intent_item(request):
                 item["approved_by"] = employee_id
                 stock_to_reduce     = new_approved - previous_approved
 
-            elif new_status in ["Reject", "Rejected", "Pending"]:
+            elif new_status in ["Rejected", "Pending"]:
                 item["approved"]    = 0
                 item["approved_by"] = (
                     "Pending" if new_status == "Pending" else employee_id
@@ -1309,10 +1324,7 @@ def update_intent_item(request):
                     employee_id,
                 ):
                     return Response(
-                        {
-                            "error": f"Insufficient stock to approve "
-                                     f"item_id={item.get('item_id')}."
-                        },
+                        {"error": f"Insufficient stock to approve item_id={item.get('item_id')}."},
                         status=400,
                     )
                 total_stock_reduced += stock_to_reduce
@@ -1326,10 +1338,7 @@ def update_intent_item(request):
                     employee_id,
                 ):
                     return Response(
-                        {
-                            "error": f"Failed to restore stock for "
-                                     f"item_id={item.get('item_id')}."
-                        },
+                        {"error": f"Failed to restore stock for item_id={item.get('item_id')}."},
                         status=400,
                     )
 
@@ -1337,10 +1346,11 @@ def update_intent_item(request):
 
     total_approved_qty = sum(
         int(i.get("approved", 0) or 0) for i in items
-        if i.get("status") in ["Approve", "Partially Approve"]
+        if i.get("status") in ["Approved", "Partially Approved"]
     )
 
-    intent.items             = json.dumps(items)
+    # ── Single json.dumps — never double-stringify ────────────────────────────
+    intent.items             = items 
     intent.approved_qty      = total_approved_qty
     intent.lastmodified_by   = str(employee_id)
     intent.lastmodified_date = timezone.now()

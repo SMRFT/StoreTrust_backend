@@ -28,7 +28,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Stores/travellers-in/update-payment-status/?(\?.*)?$':'STR-API-TRL',
 
     # Traveller's Intent:
-    '/_b_a_c_k_e_n_d/Stores/travellers-intent/':'STR-API-TIN',   
+    r'^/_b_a_c_k_e_n_d/Stores/travellers-intent/?(\?.*)?$':'STR-API-TIN',   
     '/_b_a_c_k_e_n_d/Stores/travellers-intent/update-item/':'STR-API-TIN',
     r'^/_b_a_c_k_e_n_d/Stores/travellers-intent/by-date-range/?(\?.*)?$':'STR-API-TIN',
     r'^/_b_a_c_k_e_n_d/Stores/travellers-intent/soft-delete-item/?(\?.*)?$':'STR-API-TIN',

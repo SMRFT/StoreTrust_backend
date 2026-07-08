@@ -118,20 +118,9 @@ def create_vendor(request):
 @permission_classes([HasRolePermission])
 def list_vendors(request):
     try:
-        DB_NAME = "StoreTrust"
-        COLLECTION_NAME = "vendors"
-        # 1️⃣ Connect to MongoDB
-        client = MongoClient(mongo_uri)
-        db = client[DB_NAME]
-        vendors_collection = db[COLLECTION_NAME]
+        vendors_collection = db["vendors"]
 
-        # 2️⃣ Ensure all documents have `is_active`
-        vendors_collection.update_many(
-            {"is_active": {"$exists": False}},
-            {"$set": {"is_active": True}}
-        )
-
-        # 3️⃣ Fetch only active vendors
+        # Fetch only active vendors
         def convert_decimal128(obj):
             if isinstance(obj, list):
                 return [convert_decimal128(o) for o in obj]
@@ -142,10 +131,15 @@ def list_vendors(request):
             else:
                 return obj
 
-        vendors = list(vendors_collection.find({"is_active": True}))
+        vendors = list(vendors_collection.find({
+            "$or": [
+                {"is_active": True},
+                {"is_active": {"$exists": False}}
+            ]
+        }))
         active_vendors = convert_decimal128(vendors)
 
-        # 4️⃣ Convert ObjectId to string
+        # Convert ObjectId to string
         for vendor in active_vendors:
             vendor["id"] = str(vendor["_id"])
             del vendor["_id"]
@@ -210,24 +204,18 @@ def create_item(request):
 @permission_classes([HasRolePermission])
 def list_items(request):
     try:
-        # 1️⃣ Connect to MongoDB
-        client = MongoClient(mongo_uri)
-        db = client[db_name]               # MongoDB database object
         items_collection = db["items"]     # MongoDB collection object
 
-        # 2️⃣ Ensure all documents have is_active
-        items_collection.update_many(
-            {"is_active": {"$exists": False}},
-            {"$set": {"is_active": True}}
-        )
-
-        # 3️⃣ Fetch only active items
+        # Fetch only active items
         active_items = list(items_collection.find(
-            {"is_active": True},
+            {"$or": [
+                {"is_active": True},
+                {"is_active": {"$exists": False}}
+            ]},
             {"_id": 1,"item_id": 1, "itemName": 1, "hsn": 1}
         ))
 
-        # 4️⃣ Convert ObjectId to string for JSON
+        # Convert ObjectId to string for JSON
         for item in active_items:
             item["id"] = str(item["_id"])
             del item["_id"]
@@ -351,9 +339,6 @@ def stock_alerts(request):
 @permission_classes([HasRolePermission])
 def get_items(request):
     try:
-        
-        client = MongoClient(mongo_uri)
-        db = client[db_name]               # MongoDB database object
         items_collection = db["items"]     # MongoDB collection object
         # Fetch only active items
         items_cursor = items_collection.find({
@@ -424,8 +409,6 @@ def delete_item(request, item_id):
 @permission_classes([HasRolePermission])
 def get_vendors(request):
     try:
-        client = MongoClient(mongo_uri)
-        db = client[db_name]
         vendors_collection = db["vendors"]
         # Fetch vendors where is_active is True or not set
         vendors_cursor = vendors_collection.find({
@@ -459,8 +442,6 @@ def get_vendors(request):
 @permission_classes([HasRolePermission])
 def update_vendor(request, vendor_id):
     try:
-        client = MongoClient(mongo_uri)
-        db = client[db_name]
         vendors_collection = db["vendors"]
         
         # Get only the business data, exclude auth fields
@@ -520,8 +501,6 @@ def update_vendor(request, vendor_id):
 @permission_classes([HasRolePermission])
 def delete_vendor(request, vendor_id):
     try:
-        client = MongoClient(mongo_uri)
-        db = client[db_name]
         vendors_collection = db["vendors"]
         
         # Soft delete: set is_active to False with audit fields

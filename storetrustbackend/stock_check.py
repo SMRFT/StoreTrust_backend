@@ -9,22 +9,22 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 load_dotenv()
 
+# Global MongoDB client initialized once at module load
+env_type = os.environ.get("ENV_CLASSIFICATION", "local")
+mongo_uri = os.environ.get("GLOBAL_DB_HOST")
+db_name = os.environ.get("STORETRUST_DB_NAME", "StoreTrust")
+_mongo_client = MongoClient(mongo_uri)
+db = _mongo_client[db_name]
+
 @permission_classes([HasRolePermission])
 def get_low_stock_items():
     try:
-        # Read env values
-        env_type = os.environ.get("ENV_CLASSIFICATION", "local")
-        mongo_uri = os.environ.get("GLOBAL_DB_HOST")
-        db_name = os.environ.get("STORETRUST_DB_NAME", "StoreTrust")
-        # Connect to DB
-        if env_type in ["test", "prod"]:           
-            client = MongoClient(mongo_uri)
-        else:           
-            client = MongoClient(mongo_uri)
-        db = client[db_name]
         items_collection = db["items"]
-        # Fetch all active items
-        items = items_collection.find({"is_active": True})
+        # Fetch only the required fields of active items to minimize query load
+        items = items_collection.find(
+            {"is_active": True},
+            {"itemName": 1, "hsn": 1, "total_quantity": 1, "approved_quantity": 1, "stockReorderLevel": 1}
+        )
         low_stock_items = []
         for item in items:
             hsn = item.get("hsn", "")

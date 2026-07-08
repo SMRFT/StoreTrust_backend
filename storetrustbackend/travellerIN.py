@@ -423,22 +423,13 @@ def get_travellers_in_list(request):
                     status=400,
                 )
 
-        all_records = list(TravellersIN.objects.all().order_by('-created_date'))
+        query_filters = {}
+        if from_date:
+            query_filters['invoice_date__gte'] = from_date
+        if to_date:
+            query_filters['invoice_date__lte'] = to_date
 
-        if from_date or to_date:
-            filtered = []
-            for r in all_records:
-                inv_date = getattr(r, 'invoice_date', None)
-                if inv_date is None:
-                    continue
-                if hasattr(inv_date, 'date'):
-                    inv_date = inv_date.date()
-                if from_date and inv_date < from_date:
-                    continue
-                if to_date and inv_date > to_date:
-                    continue
-                filtered.append(r)
-            all_records = filtered
+        all_records = list(TravellersIN.objects.filter(**query_filters).order_by('-created_date'))
 
         try:
             page      = max(1, int(request.GET.get('page', 1)))
@@ -956,7 +947,39 @@ def get_previous_purchases(request):
         )
 
     try:
-        documents = purchases_collection.find({})
+        hsn_clean = hsn.strip()
+        item_id_clean = str(item_id).strip()
+        
+        # Escape for regex use
+        hsn_escaped = re.escape(hsn_clean)
+        item_id_escaped = re.escape(item_id_clean)
+        
+        regex_hsn = f'"hsn"\\s*:\\s*"{hsn_escaped}"'
+        regex_item_id = f'"item_id"\\s*:\\s*(?:"{item_id_escaped}"|{item_id_escaped}\\b)'
+
+        query = {
+            "$or": [
+                {
+                    "items": {
+                        "$elemMatch": {
+                            "hsn": hsn_clean,
+                            "$or": [
+                                {"item_id": item_id_clean},
+                                {"item_id": int(item_id_clean) if item_id_clean.isdigit() else item_id_clean}
+                            ]
+                        }
+                    }
+                },
+                {
+                    "$and": [
+                        {"items": {"$regex": regex_hsn}},
+                        {"items": {"$regex": regex_item_id}}
+                    ]
+                }
+            ]
+        }
+
+        documents = purchases_collection.find(query)
         matched_purchases = []
 
         for doc in documents:
@@ -987,7 +1010,7 @@ def get_previous_purchases(request):
                 doc_item_id = str(item.get('item_id', '')).strip()
                 doc_hsn     = str(item.get('hsn', '')).strip()
 
-                if doc_item_id == str(item_id).strip() and doc_hsn == hsn.strip():
+                if doc_item_id == item_id_clean and doc_hsn == hsn_clean:
                     resolved_name    = get_item_name_by_id(item.get('item_id'))
                     item['itemName'] = resolved_name or item.get('itemName', '')
 
@@ -1001,7 +1024,7 @@ def get_previous_purchases(request):
                             vendor_doc = vendors_collection.find_one({
                                 "$or": [
                                     {"vendor_id": str(vendor_id).strip()},
-                                    {"vendor_id": int(vendor_id)},
+                                    {"vendor_id": int(vendor_id) if str(vendor_id).strip().isdigit() else vendor_id},
                                 ]
                             })
                             if vendor_doc:
@@ -1023,8 +1046,41 @@ def get_previous_purchases(request):
 @api_view(['GET'])
 @permission_classes([HasRolePermission])
 def travellers_stock(request):
-    item_id    = request.GET.get("item_id")
-    hsn_number = request.GET.get("hsn")
+    item_id      = request.GET.get("item_id")
+    hsn_number   = request.GET.get("hsn")
+    item_ids_str = request.GET.get("item_ids")
+
+    # ── Batch stock query path ──────────────────────────────────────────────
+    if item_ids_str is not None:
+        try:
+            item_ids = [x.strip() for x in item_ids_str.split(",") if x.strip()]
+            query_item_ids = []
+            for i_id in item_ids:
+                try:
+                    query_item_ids.append(int(i_id))
+                except (ValueError, TypeError):
+                    query_item_ids.append(i_id)
+
+            items_cursor = items_collection.find(
+                {"item_id": {"$in": query_item_ids}, "is_active": True},
+                {"item_id": 1, "total_quantity": 1, "approved_quantity": 1}
+            )
+
+            stocks_map = {}
+            for doc in items_cursor:
+                total_qty = int(doc.get("total_quantity", 0) or 0)
+                approved_qty = int(doc.get("approved_quantity", 0) or 0)
+                available_stock = total_qty - approved_qty
+                stocks_map[str(doc.get("item_id"))] = available_stock
+
+            return JsonResponse({
+                "success": True,
+                "stocks":  stocks_map
+            })
+        except Exception as e:
+            return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+    # ── Existing single-item lookup path (backward compatible) ──────────────
     try:
         query = {"is_active": True}
 
@@ -1042,7 +1098,6 @@ def travellers_stock(request):
             return JsonResponse({"success": False, "error": "Item not found"}, status=404)
 
         total_quantity    = int(item_doc.get("total_quantity", 0) or 0)
-        # ── Guard against null approved_quantity ──────────────────────────
         approved_quantity = int(item_doc.get("approved_quantity") or 0)
         available_stock   = total_quantity - approved_quantity
 
@@ -1094,7 +1149,33 @@ def travellers_intent(request):
         serializer = TravellerIntentSerializer(intents, many=True)
         data       = serializer.data
 
-        # Resolve itemName for each item in each intent using item_id
+        # Resolve itemName for each item in each intent using item_id in bulk
+        all_item_ids = set()
+        for intent in data:
+            raw_items = intent.get('items', [])
+            if isinstance(raw_items, str):
+                try:
+                    raw_items = json.loads(raw_items)
+                except json.JSONDecodeError:
+                    raw_items = []
+            if isinstance(raw_items, list):
+                for item in raw_items:
+                    item_id = item.get('item_id')
+                    if item_id is not None:
+                        try:
+                            all_item_ids.add(int(item_id))
+                        except (ValueError, TypeError):
+                            pass
+
+        items_map = {}
+        if all_item_ids:
+            try:
+                items_queryset = Items.objects.filter(item_id__in=list(all_item_ids))
+                for item in items_queryset:
+                    items_map[item.item_id] = item.itemName
+            except Exception as e:
+                logger.error(f"[travellers_intent GET] Error bulk querying item names: {e}")
+
         for intent in data:
             raw_items = intent.get('items', [])
             if isinstance(raw_items, str):
@@ -1104,14 +1185,19 @@ def travellers_intent(request):
                     raw_items = []
 
             resolved_items = []
-            for item in raw_items:
-                item_copy = dict(item)
-                item_id   = item_copy.get('item_id')
-                if item_id is not None:
-                    resolved_name = get_item_name_by_id(item_id)
-                    if resolved_name:
-                        item_copy['itemName'] = resolved_name
-                resolved_items.append(item_copy)
+            if isinstance(raw_items, list):
+                for item in raw_items:
+                    item_copy = dict(item)
+                    item_id   = item_copy.get('item_id')
+                    if item_id is not None:
+                        try:
+                            int_item_id = int(item_id)
+                            resolved_name = items_map.get(int_item_id)
+                        except (ValueError, TypeError):
+                            resolved_name = None
+                        if resolved_name:
+                            item_copy['itemName'] = resolved_name
+                    resolved_items.append(item_copy)
 
             intent['items'] = resolved_items
 
@@ -1285,6 +1371,17 @@ def update_intent_item(request):
             resolved_name = get_item_name_by_id(item.get("item_id"))
             if resolved_name:
                 item["itemName"] = resolved_name
+
+            # Check if dispatch update is specified:
+            is_dispatch = update.get("is_dispatch")
+            if is_dispatch is not None:
+                item["is_dispatch"] = bool(is_dispatch)
+                if is_dispatch:
+                    item["dispatched_by"] = employee_id
+                    item["dispatch_date_time"] = timezone.now().isoformat()
+                else:
+                    item.pop("dispatched_by", None)
+                    item.pop("dispatch_date_time", None)
 
             if new_quantity is not None:
                 item["quantity"] = int(new_quantity)

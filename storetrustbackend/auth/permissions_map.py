@@ -19,7 +19,7 @@ PAGE_MAPPING = {
 
     # Travellers IN (GRN):
     '/_b_a_c_k_e_n_d/Stores/travellers-in/':'STR-API-TRL',
-    r'^/_b_a_c_k_e_n_d/Stores/travellers-in/previous-purchases/?(\?.*)?$':'STR-API-TRL',
+    r'^/_b_a_c_k_e_n_d/Stores/travellers-in/previous-purchases/?(\?.*)?$':'STR-API-IL',
     r'^/_b_a_c_k_e_n_d/Stores/travellers-in/update(?:/[^/]+)+/$':'STR-API-TRL',
 
     # GRN Report:

@@ -146,23 +146,84 @@ def update_stock_by_hsn(items):
                 logger.warning(f"No item found for HSN {hsn}, stock not updated.")
 
 
-def reduce_stock(item_name, hsn, quantity_to_increment, auth_user_id):
-    if not item_name or quantity_to_increment <= 0:
-        logger.debug(f"[reduce_stock] Skipping {item_name} (HSN {hsn}), qty {quantity_to_increment}")
+def update_stock_for_grn(old_items, new_items, auth_user_id=None):
+    """
+    Adjust total_quantity in items_collection based on the difference 
+    between old_items and new_items.
+    Both parameters are lists of item dicts.
+    """
+    old_map = {}
+    for item in old_items:
+        item_id = item.get("item_id")
+        if item_id is not None:
+            old_map[str(item_id)] = int(item.get("totalstock", 0) or 0)
+
+    new_map = {}
+    for item in new_items:
+        item_id = item.get("item_id")
+        if item_id is not None:
+            new_map[str(item_id)] = int(item.get("totalstock", 0) or 0)
+
+    all_item_ids = set(old_map.keys()) | set(new_map.keys())
+
+    for item_id in all_item_ids:
+        old_qty = old_map.get(item_id, 0)
+        new_qty = new_map.get(item_id, 0)
+        delta = new_qty - old_qty
+
+        if delta != 0:
+            try:
+                try:
+                    query = {"item_id": int(item_id)}
+                except (ValueError, TypeError):
+                    query = {"item_id": item_id}
+
+                # Robust query matching either is_active=True or is_active field not existing
+                query["$or"] = [
+                    {"is_active": True},
+                    {"is_active": {"$exists": False}}
+                ]
+
+                # Ensure total_quantity is not null by setting to 0 first if it is
+                items_collection.update_one(
+                    {**query, "total_quantity": None},
+                    {"$set": {"total_quantity": 0}},
+                )
+
+                items_collection.find_one_and_update(
+                    query,
+                    {"$inc": {"total_quantity": delta}},
+                    return_document=True,
+                )
+                logger.debug(f"[update_stock_for_grn] item_id={item_id}: total_quantity adjusted by {delta}")
+            except Exception as e:
+                logger.error(f"[update_stock_for_grn] Error adjusting stock for item_id={item_id}: {e}")
+
+
+def reduce_stock(item_id, item_name, hsn, quantity_to_increment, auth_user_id):
+    if quantity_to_increment <= 0:
         return False
     try:
-        safe_hsn      = str(hsn or "").strip()
-        stripped_name = item_name.strip()
-
-        query = {
-            "itemName": {
+        query = {}
+        if item_id is not None:
+            try:
+                query["item_id"] = int(item_id)
+            except (ValueError, TypeError):
+                query["item_id"] = item_id
+        else:
+            safe_hsn      = str(hsn or "").strip()
+            stripped_name = item_name.strip()
+            query["itemName"] = {
                 "$regex":   f"^\\s*{re.escape(stripped_name)}\\s*$",
                 "$options": "i",
-            },
-            "is_active": True,
-        }
-        if safe_hsn:
-            query["hsn"] = safe_hsn
+            }
+            if safe_hsn:
+                query["hsn"] = safe_hsn
+
+        query["$or"] = [
+            {"is_active": True},
+            {"is_active": {"$exists": False}}
+        ]
 
         # ── Step 1: If approved_quantity is null, set it to 0 first ──────
         items_collection.update_one(
@@ -183,15 +244,15 @@ def reduce_stock(item_name, hsn, quantity_to_increment, auth_user_id):
             return_document=True,
         )
         if not result:
-            logger.warning(f"[reduce_stock] No item found for {item_name} (HSN {hsn}).")
+            logger.warning(f"[reduce_stock] No item found for query {query}.")
             return False
         logger.debug(
-            f"[reduce_stock] {item_name} (HSN {hsn}): "
+            f"[reduce_stock] query {query}: "
             f"approved_quantity +{quantity_to_increment}"
         )
         return True
     except Exception as e:
-        logger.error(f"[reduce_stock] Error updating {item_name} (HSN {hsn}): {e}")
+        logger.error(f"[reduce_stock] Error updating query {query}: {e}")
         return False
 
 def add_back_stock(item_id, hsn, quantity_to_subtract, employee_id=None):
@@ -201,9 +262,14 @@ def add_back_stock(item_id, hsn, quantity_to_subtract, employee_id=None):
 
         safe_hsn = str(hsn or "").strip()
         try:
-            query = {"item_id": int(item_id), "is_active": True}
+            query = {"item_id": int(item_id)}
         except (ValueError, TypeError):
-            query = {"item_id": item_id, "is_active": True}
+            query = {"item_id": item_id}
+
+        query["$or"] = [
+            {"is_active": True},
+            {"is_active": {"$exists": False}}
+        ]
 
         if safe_hsn:
             query["hsn"] = safe_hsn
@@ -373,6 +439,12 @@ def create_travellers_in(request):
 
         if serializer.is_valid():
             travellers_in = serializer.save()
+
+            # Update stock in items collection
+            try:
+                update_stock_for_grn([], items, employee_id)
+            except Exception as se:
+                logger.error(f"Failed to update stock on GRN creation: {se}")
 
             # 🔥 IMPORTANT: use serializer.data (not re-serialize)
             return JsonResponse({
@@ -757,6 +829,17 @@ def travellers_in_update(request, grn_number, grn_id):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        raw_items_old = document.get('items', [])
+        if isinstance(raw_items_old, str):
+            try:
+                old_items = json.loads(raw_items_old)
+            except json.JSONDecodeError:
+                old_items = []
+        elif isinstance(raw_items_old, list):
+            old_items = raw_items_old
+        else:
+            old_items = []
+
         data = request.data
 
         # ── Resolve itemName for each item using item_id from Items model ─
@@ -907,6 +990,12 @@ def travellers_in_update(request, grn_number, grn_id):
     upsert=False,
 )
         if result.matched_count >= 1:
+            # Update stock in items collection
+            try:
+                update_stock_for_grn(old_items, resolved_items, data.get('auth-user-id') or 'Anonymous')
+            except Exception as se:
+                logger.error(f"Failed to update stock on GRN update: {se}")
+
             updated_doc = purchases_collection.find_one({
     "grn_number": grn_number,
     "grn_id": int(grn_id)
@@ -1294,6 +1383,7 @@ def travellers_intent(request):
                     resolved_name       = get_item_name_by_id(item.get("item_id"))
                     item_name_for_stock = resolved_name or item.get("itemName", "")
                     if not reduce_stock(
+                        item.get("item_id"),
                         item_name_for_stock,
                         item.get("hsn"),
                         delta,
@@ -1415,6 +1505,7 @@ def update_intent_item(request):
 
             if stock_to_reduce > 0:
                 if not reduce_stock(
+                    item.get("item_id"),
                     item.get("itemName"),
                     str(item.get("hsn", "")),
                     stock_to_reduce,

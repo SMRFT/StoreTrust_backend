@@ -23,7 +23,7 @@ def get_low_stock_items():
         # Fetch only the required fields of active items to minimize query load
         items = items_collection.find(
             {"is_active": True},
-            {"itemName": 1, "hsn": 1, "total_quantity": 1, "approved_quantity": 1, "stockReorderLevel": 1}
+            {"itemName": 1, "hsn": 1, "total_quantity": 1, "openingStock": 1, "approved_quantity": 1, "stockReorderLevel": 1}
         )
         low_stock_items = []
         for item in items:
@@ -31,16 +31,21 @@ def get_low_stock_items():
             item_name = item.get("itemName", "")
             # total_quantity
             try:
-                total_quantity = int(item.get("total_quantity", 0))
+                total_quantity = int(item.get("total_quantity", 0) or 0)
             except (ValueError, TypeError):
                 logger.warning(f"Invalid total_quantity for {item_name} (HSN: {hsn}): {item.get('total_quantity')}")
                 total_quantity = 0
+            # openingStock
+            try:
+                opening_stock = int(item.get("openingStock", 0) or 0)
+            except (ValueError, TypeError):
+                opening_stock = 0
             # approved_quantity (optional, subtract if present)
             try:
-                approved_quantity = int(item.get("approved_quantity", 0))
+                approved_quantity = int(item.get("approved_quantity", 0) or 0)
             except (ValueError, TypeError):
                 approved_quantity = 0
-            available_stock = total_quantity - approved_quantity
+            available_stock = total_quantity + opening_stock - approved_quantity
             # reorder level
             try:
                 stock_reorder_level = int(item.get("stockReorderLevel", 0))

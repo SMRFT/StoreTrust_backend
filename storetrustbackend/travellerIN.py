@@ -1152,14 +1152,15 @@ def travellers_stock(request):
 
             items_cursor = items_collection.find(
                 {"item_id": {"$in": query_item_ids}, "is_active": True},
-                {"item_id": 1, "total_quantity": 1, "approved_quantity": 1}
+                {"item_id": 1, "total_quantity": 1, "openingStock": 1, "approved_quantity": 1}
             )
 
             stocks_map = {}
             for doc in items_cursor:
                 total_qty = int(doc.get("total_quantity", 0) or 0)
+                opening_stock = int(doc.get("openingStock", 0) or 0)
                 approved_qty = int(doc.get("approved_quantity", 0) or 0)
-                available_stock = total_qty - approved_qty
+                available_stock = total_qty + opening_stock - approved_qty
                 stocks_map[str(doc.get("item_id"))] = available_stock
 
             return JsonResponse({
@@ -1187,8 +1188,9 @@ def travellers_stock(request):
             return JsonResponse({"success": False, "error": "Item not found"}, status=404)
 
         total_quantity    = int(item_doc.get("total_quantity", 0) or 0)
+        opening_stock     = int(item_doc.get("openingStock", 0) or 0)
         approved_quantity = int(item_doc.get("approved_quantity") or 0)
-        available_stock   = total_quantity - approved_quantity
+        available_stock   = total_quantity + opening_stock - approved_quantity
 
         return JsonResponse({
             "success":           True,

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import TravellersIN, TravellerIntent, Vendors, Items, CollegeIntent, MessIntent
+from .models import TravellersIN, TravellerIntent, Vendors, Items, CollegeIntent, MessIntent, Store, Stock
 from bson import ObjectId, Decimal128
 
 
@@ -18,6 +18,28 @@ class Decimal128Field(serializers.Field):
     def to_internal_value(self, data):
         return Decimal128(str(data))
 
+class StoreSerializer(serializers.ModelSerializer):
+    id = serializers.SerializerMethodField()
+
+    def get_id(self, obj):
+        return str(obj.id) if isinstance(obj.id, ObjectId) else obj.id
+
+    class Meta:
+        model = Store
+        fields = '__all__'
+
+
+class StockSerializer(serializers.ModelSerializer):
+    id = serializers.SerializerMethodField()
+
+    def get_id(self, obj):
+        return str(obj.id) if isinstance(obj.id, ObjectId) else obj.id
+
+    class Meta:
+        model = Stock
+        fields = '__all__'
+
+
 class TravellersINSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
 
@@ -29,6 +51,7 @@ class TravellersINSerializer(serializers.ModelSerializer):
     # ── Audit fields: writable so the view can set them on update ─────────
     lastmodified_by   = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     lastmodified_date = serializers.DateTimeField(required=False, allow_null=True)
+    outlet_code       = serializers.CharField(required=False, allow_null=True, allow_blank=True)
 
     class Meta:
         model = TravellersIN
@@ -67,6 +90,7 @@ class TravellersINSerializer(serializers.ModelSerializer):
             'created_date',
             'lastmodified_by',
             'lastmodified_date',
+            'outlet_code',
         ]
         # created_date is read-only; lastmodified_date is now writable above
         read_only_fields = ['id', 'created_date']
@@ -122,7 +146,7 @@ class VendorsSerializer(serializers.ModelSerializer):
         # Set the created_by field
         if employee_id:
             validated_data['created_by'] = employee_id
-            
+        validated_data.pop('outlet_code', None)
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
@@ -132,8 +156,13 @@ class VendorsSerializer(serializers.ModelSerializer):
         # Set the lastmodified_by field
         if employee_id:
             validated_data['lastmodified_by'] = employee_id
-            
+        validated_data.pop('outlet_code', None)
         return super().update(instance, validated_data)
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret.pop('outlet_code', None)
+        return ret
 
 
 
@@ -154,13 +183,20 @@ class ItemsSerializer(serializers.ModelSerializer):
         employee_id = self.context.get('employee_id')
         if employee_id:
             validated_data['created_by'] = employee_id
+        validated_data.pop('outlet_code', None)
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
         employee_id = self.context.get('employee_id')
         if employee_id:
             validated_data['lastmodified_by'] = employee_id
+        validated_data.pop('outlet_code', None)
         return super().update(instance, validated_data)
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret.pop('outlet_code', None)
+        return ret
 
 class CollegeIntentSerializer(serializers.ModelSerializer):
    created_by = serializers.CharField() 

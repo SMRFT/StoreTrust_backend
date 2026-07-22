@@ -39,4 +39,11 @@ urlpatterns = [
 
     # Traveller Intent Report:
     path('travellers-stock/', travellerIN.travellers_stock, name='travellers_stock'),
-   ]
+
+    # Outlet / Store URLs
+    path('outlets/list/', inventory.list_outlets, name='list_outlets'),
+    path('outlets/', inventory.create_outlet, name='create_outlet'),
+
+    # Stock URLs
+    path('stock/list/', inventory.list_stock, name='list_stock'),
+]

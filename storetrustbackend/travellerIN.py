@@ -8,6 +8,7 @@ from .models import TravellersIN, Vendors
 from .serializers import TravellersINSerializer
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
@@ -29,6 +30,7 @@ from datetime import date, datetime
 
 from .models import Items
 from .serializers import ItemsSerializer
+from .inventory import get_item_stock_details
 
 logger = logging.getLogger(__name__)
 
@@ -146,166 +148,157 @@ def update_stock_by_hsn(items):
                 logger.warning(f"No item found for HSN {hsn}, stock not updated.")
 
 
-def update_stock_for_grn(old_items, new_items, auth_user_id=None):
+def update_stock_for_grn(old_items, new_items, auth_user_id=None, outlet_code=None):
     """
-    Adjust total_quantity in items_collection based on the difference 
-    between old_items and new_items.
-    Both parameters are lists of item dicts.
+    Adjust total_quantity in stock_collection for (item_id, outlet_code) 
+    based on the difference between old_items and new_items.
+    If no stock doc exists for (item_id, outlet_code) and delta > 0, create one!
     """
     old_map = {}
     for item in old_items:
-        item_id = item.get("item_id")
+        item_id = item.get("item_id") or item.get("id")
         if item_id is not None:
-            old_map[str(item_id)] = int(item.get("totalstock", 0) or 0)
+            old_map[str(item_id)] = float(item.get("totalstock") or item.get("quantity") or item.get("noOfUnit") or 0)
 
     new_map = {}
+    hsn_map = {}
     for item in new_items:
-        item_id = item.get("item_id")
+        item_id = item.get("item_id") or item.get("id")
         if item_id is not None:
-            new_map[str(item_id)] = int(item.get("totalstock", 0) or 0)
+            new_map[str(item_id)] = float(item.get("totalstock") or item.get("quantity") or item.get("noOfUnit") or 0)
+            hsn_map[str(item_id)] = str(item.get("hsn") or "")
 
     all_item_ids = set(old_map.keys()) | set(new_map.keys())
+    stock_coll = db["stock"]
 
     for item_id in all_item_ids:
-        old_qty = old_map.get(item_id, 0)
-        new_qty = new_map.get(item_id, 0)
+        old_qty = old_map.get(item_id, 0.0)
+        new_qty = new_map.get(item_id, 0.0)
         delta = new_qty - old_qty
 
         if delta != 0:
             try:
                 try:
-                    query = {"item_id": int(item_id)}
+                    int_id = int(item_id)
                 except (ValueError, TypeError):
-                    query = {"item_id": item_id}
+                    int_id = item_id
 
-                # Robust query matching either is_active=True or is_active field not existing
-                query["$or"] = [
-                    {"is_active": True},
-                    {"is_active": {"$exists": False}}
-                ]
+                hsn_val = hsn_map.get(str(item_id), "")
 
-                # Ensure total_quantity is not null by setting to 0 first if it is
-                items_collection.update_one(
-                    {**query, "total_quantity": None},
-                    {"$set": {"total_quantity": 0}},
-                )
+                st_query = {
+                    "$or": [{"item_id": int_id}, {"item_id": str(int_id)}],
+                    "$and": [{"$or": [{"is_active": True}, {"is_active": {"$exists": False}}]}]
+                }
+                if outlet_code:
+                    st_query["outlet_code"] = outlet_code
 
-                items_collection.find_one_and_update(
-                    query,
-                    {"$inc": {"total_quantity": delta}},
-                    return_document=True,
-                )
-                logger.debug(f"[update_stock_for_grn] item_id={item_id}: total_quantity adjusted by {delta}")
+                existing_st = stock_coll.find_one(st_query)
+
+                if existing_st:
+                    stock_coll.update_one(
+                        {"_id": existing_st["_id"]},
+                        {
+                            "$inc": {"total_quantity": delta},
+                            "$set": {
+                                "hsn": hsn_val or existing_st.get("hsn", ""),
+                                "lastmodified_by": str(auth_user_id or "11111"),
+                                "lastmodified_date": datetime.utcnow()
+                            }
+                        }
+                    )
+                else:
+                    if delta > 0:
+                        last_st = stock_coll.find_one(sort=[("stock_id", -1)])
+                        next_st_id = (last_st.get("stock_id", 0) + 1) if last_st and "stock_id" in last_st else 1
+                        st_doc = {
+                            "stock_id": next_st_id,
+                            "item_id": int_id if isinstance(int_id, int) else 0,
+                            "hsn": hsn_val,
+                            "total_quantity": delta,
+                            "approved_quantity": 0.0,
+                            "opening_stock": 0.0,
+                            "outlet_code": outlet_code or "OLET001",
+                            "is_active": True,
+                            "created_by": str(auth_user_id or "11111"),
+                            "created_date": datetime.utcnow()
+                        }
+                        stock_coll.insert_one(st_doc)
+
+                logger.debug(f"[update_stock_for_grn] item_id={item_id}, outlet_code={outlet_code}: total_quantity adjusted by {delta}")
             except Exception as e:
                 logger.error(f"[update_stock_for_grn] Error adjusting stock for item_id={item_id}: {e}")
 
 
-def reduce_stock(item_id, item_name, hsn, quantity_to_increment, auth_user_id):
+def reduce_stock(item_id, item_name, hsn, quantity_to_increment, auth_user_id, outlet_code=None):
     if quantity_to_increment <= 0:
         return False
     try:
-        query = {}
-        if item_id is not None:
-            try:
-                query["item_id"] = int(item_id)
-            except (ValueError, TypeError):
-                query["item_id"] = item_id
-        else:
-            safe_hsn      = str(hsn or "").strip()
-            stripped_name = item_name.strip()
-            query["itemName"] = {
-                "$regex":   f"^\\s*{re.escape(stripped_name)}\\s*$",
-                "$options": "i",
-            }
-            if safe_hsn:
-                query["hsn"] = safe_hsn
+        stock_coll = db["stock"]
+        try:
+            int_id = int(item_id)
+        except (ValueError, TypeError):
+            int_id = item_id
 
-        query["$or"] = [
-            {"is_active": True},
-            {"is_active": {"$exists": False}}
-        ]
+        st_query = {
+            "$or": [{"item_id": int_id}, {"item_id": str(int_id)}],
+            "$and": [{"$or": [{"is_active": True}, {"is_active": {"$exists": False}}]}]
+        }
+        if outlet_code:
+            st_query["outlet_code"] = outlet_code
 
-        # ── Step 1: If approved_quantity is null, set it to 0 first ──────
-        items_collection.update_one(
-            {**query, "approved_quantity": None},
-            {"$set": {"approved_quantity": 0}},
-        )
+        st_doc = stock_coll.find_one(st_query)
+        if st_doc:
+            stock_coll.update_one(
+                {"_id": st_doc["_id"]},
+                {
+                    "$inc": {"approved_quantity": float(quantity_to_increment)},
+                    "$set": {
+                        "lastmodified_date": datetime.utcnow(),
+                        "lastmodified_by": str(auth_user_id),
+                    }
+                }
+            )
 
-        # ── Step 2: Now safely increment ─────────────────────────────────
-        result = items_collection.find_one_and_update(
-            query,
-            {
-                "$inc": {"approved_quantity": quantity_to_increment},
-                "$set": {
-                    "lastmodified_date": datetime.utcnow(),
-                    "lastmodified_by":   auth_user_id,
-                },
-            },
-            return_document=True,
-        )
-        if not result:
-            logger.warning(f"[reduce_stock] No item found for query {query}.")
-            return False
-        logger.debug(
-            f"[reduce_stock] query {query}: "
-            f"approved_quantity +{quantity_to_increment}"
-        )
         return True
     except Exception as e:
-        logger.error(f"[reduce_stock] Error updating query {query}: {e}")
+        logger.error(f"[reduce_stock] Error updating query for item_id={item_id}: {e}")
         return False
 
-def add_back_stock(item_id, hsn, quantity_to_subtract, employee_id=None):
+
+def add_back_stock(item_id, hsn, quantity_to_subtract, employee_id=None, outlet_code=None):
     try:
         if item_id is None or int(quantity_to_subtract) <= 0:
             return False
 
-        safe_hsn = str(hsn or "").strip()
+        stock_coll = db["stock"]
         try:
-            query = {"item_id": int(item_id)}
+            int_id = int(item_id)
         except (ValueError, TypeError):
-            query = {"item_id": item_id}
+            int_id = item_id
 
-        query["$or"] = [
-            {"is_active": True},
-            {"is_active": {"$exists": False}}
-        ]
+        st_query = {
+            "$or": [{"item_id": int_id}, {"item_id": str(int_id)}],
+            "$and": [{"$or": [{"is_active": True}, {"is_active": {"$exists": False}}]}]
+        }
+        if outlet_code:
+            st_query["outlet_code"] = outlet_code
 
-        if safe_hsn:
-            query["hsn"] = safe_hsn
-
-        # ── Initialize approved_quantity to 0 if null ─────────────────────
-        items_collection.update_one(
-            {**query, "approved_quantity": None},
-            {"$set": {"approved_quantity": 0}},
-        )
-
-        item_doc = items_collection.find_one(query)
-        if not item_doc:
-            logger.warning(
-                f"[add_back_stock] No item found for item_id={item_id} (HSN {hsn})."
-            )
-            return False
-
-        current_approved = int(item_doc.get("approved_quantity", 0) or 0)
-        new_approved     = max(0, current_approved - int(quantity_to_subtract))
-
-        items_collection.update_one(
-            {"_id": item_doc["_id"]},
-            {
-                "$set": {
-                    "approved_quantity": new_approved,
-                    "lastmodified_by":   employee_id,
-                    "lastmodified_date": datetime.utcnow(),
+        st_doc = stock_coll.find_one(st_query)
+        if st_doc:
+            curr_app = float(st_doc.get("approved_quantity", 0) or 0)
+            new_app = max(0.0, curr_app - float(quantity_to_subtract))
+            stock_coll.update_one(
+                {"_id": st_doc["_id"]},
+                {
+                    "$set": {
+                        "approved_quantity": new_app,
+                        "lastmodified_by": str(employee_id),
+                        "lastmodified_date": datetime.utcnow()
+                    }
                 }
-            },
-        )
-        logger.debug(
-            f"[add_back_stock] item_id={item_id} (HSN {hsn}): "
-            f"approved_quantity {current_approved} → {new_approved}"
-        )
-        return True
+            )
 
+        return True
     except Exception as e:
         logger.error(f"[add_back_stock] Error for item_id={item_id}: {e}")
         return False
@@ -418,10 +411,12 @@ def create_travellers_in(request):
             value = summary.get(frontend_field, 0)
             mapped_data[backend_field] = float(value) if value not in ["", None] else 0
 
-        # Audit
+        # Audit & Outlet
         employee_id = data.get('auth-user-id')
+        outlet_code = data.get('outlet_code') or request.GET.get('outlet_code')
         mapped_data['created_by'] = employee_id if employee_id else 'Anonymous'
         mapped_data['is_active'] = True
+        mapped_data['outlet_code'] = outlet_code
 
         # Payment status
         net_invoice_amount = float(mapped_data.get('net_invoice_amount', 0))
@@ -440,9 +435,9 @@ def create_travellers_in(request):
         if serializer.is_valid():
             travellers_in = serializer.save()
 
-            # Update stock in items collection
+            # Update / patch stock in stock collection
             try:
-                update_stock_for_grn([], items, employee_id)
+                update_stock_for_grn([], items, employee_id, outlet_code)
             except Exception as se:
                 logger.error(f"Failed to update stock on GRN creation: {se}")
 
@@ -468,12 +463,12 @@ def create_travellers_in(request):
         }, status=500)
 
 @api_view(['GET'])
-@permission_classes([HasRolePermission])
 def get_travellers_in_list(request):
-    """List TravellersIN records with pagination, date filtering, and vendor details."""
+    """List TravellersIN records with pagination, date filtering, vendor details, and outlet filtering."""
     try:
         from_date_str = request.GET.get('from_date')
         to_date_str   = request.GET.get('to_date')
+        outlet_code   = request.GET.get('outlet_code')
         from_date     = None
         to_date       = None
 
@@ -500,6 +495,8 @@ def get_travellers_in_list(request):
             query_filters['invoice_date__gte'] = from_date
         if to_date:
             query_filters['invoice_date__lte'] = to_date
+        if outlet_code:
+            query_filters['outlet_code'] = outlet_code
 
         all_records = list(TravellersIN.objects.filter(**query_filters).order_by('-created_date'))
 
@@ -523,8 +520,8 @@ def get_travellers_in_list(request):
                     'phone': '', 'address': '', 'email': '',
                 }
                 if obj.vendor_id:
-                    try:
-                        vendor = Vendors.objects.get(vendor_id=obj.vendor_id)
+                    vendor = Vendors.objects.filter(vendor_id=obj.vendor_id).first()
+                    if vendor:
                         vendor_details = {
                             'vendor':         vendor.name,
                             'contact_person': vendor.contactPerson or '',
@@ -533,8 +530,6 @@ def get_travellers_in_list(request):
                                               f"{vendor.city}, {vendor.state or ''}".strip(', '),
                             'email':          vendor.email or '',
                         }
-                    except Vendors.DoesNotExist:
-                        logger.warning(f"Vendor {obj.vendor_id} not found")
 
                 # ── Items — resolve itemName from Items model via item_id ──
                 items = getattr(obj, 'items', [])
@@ -990,9 +985,10 @@ def travellers_in_update(request, grn_number, grn_id):
     upsert=False,
 )
         if result.matched_count >= 1:
-            # Update stock in items collection
+            # Update stock in stock collection
             try:
-                update_stock_for_grn(old_items, resolved_items, data.get('auth-user-id') or 'Anonymous')
+                outlet_code = (request.data.get("outlet_code") if isinstance(request.data, dict) else None) or document.get("outlet_code")
+                update_stock_for_grn(old_items, resolved_items, data.get('auth-user-id') or 'Anonymous', outlet_code)
             except Exception as se:
                 logger.error(f"Failed to update stock on GRN update: {se}")
 
@@ -1138,30 +1134,16 @@ def travellers_stock(request):
     item_id      = request.GET.get("item_id")
     hsn_number   = request.GET.get("hsn")
     item_ids_str = request.GET.get("item_ids")
+    outlet_code  = request.GET.get('outlet_code')
 
     # ── Batch stock query path ──────────────────────────────────────────────
     if item_ids_str is not None:
         try:
             item_ids = [x.strip() for x in item_ids_str.split(",") if x.strip()]
-            query_item_ids = []
-            for i_id in item_ids:
-                try:
-                    query_item_ids.append(int(i_id))
-                except (ValueError, TypeError):
-                    query_item_ids.append(i_id)
-
-            items_cursor = items_collection.find(
-                {"item_id": {"$in": query_item_ids}, "is_active": True},
-                {"item_id": 1, "total_quantity": 1, "openingStock": 1, "approved_quantity": 1}
-            )
-
             stocks_map = {}
-            for doc in items_cursor:
-                total_qty = int(doc.get("total_quantity", 0) or 0)
-                opening_stock = int(doc.get("openingStock", 0) or 0)
-                approved_qty = int(doc.get("approved_quantity", 0) or 0)
-                available_stock = total_qty + opening_stock - approved_qty
-                stocks_map[str(doc.get("item_id"))] = available_stock
+            for i_id in item_ids:
+                stock_info = get_item_stock_details(i_id, outlet_code)
+                stocks_map[str(i_id)] = stock_info["total_stock"]
 
             return JsonResponse({
                 "success": True,
@@ -1170,36 +1152,29 @@ def travellers_stock(request):
         except Exception as e:
             return JsonResponse({"success": False, "error": str(e)}, status=500)
 
-    # ── Existing single-item lookup path (backward compatible) ──────────────
+    # ── Existing single-item lookup path ───────────────────────────────────
     try:
-        query = {"is_active": True}
+        if not item_id:
+            return JsonResponse({"success": False, "error": "item_id parameter is required"}, status=400)
 
-        if item_id is not None:
-            try:
-                query["item_id"] = int(item_id)
-            except (ValueError, TypeError):
-                query["item_id"] = item_id
+        stock_info = get_item_stock_details(item_id, outlet_code)
+        
+        try:
+            int_id = int(item_id)
+        except (ValueError, TypeError):
+            int_id = item_id
 
-        if hsn_number:
-            query["hsn"] = hsn_number.strip()
-
-        item_doc = items_collection.find_one(query)
-        if not item_doc:
-            return JsonResponse({"success": False, "error": "Item not found"}, status=404)
-
-        total_quantity    = int(item_doc.get("total_quantity", 0) or 0)
-        opening_stock     = int(item_doc.get("openingStock", 0) or 0)
-        approved_quantity = int(item_doc.get("approved_quantity") or 0)
-        available_stock   = total_quantity + opening_stock - approved_quantity
+        item_doc = db["items"].find_one({"$or": [{"item_id": int_id}, {"item_id": str(int_id)}]})
 
         return JsonResponse({
             "success":           True,
-            "item_id":           item_doc.get("item_id"),
-            "itemName":          item_doc.get("itemName"),
-            "hsn":               item_doc.get("hsn"),
-            "total_quantity":    total_quantity,
-            "approved_quantity": approved_quantity,
-            "total_stock":       available_stock,
+            "item_id":           item_id,
+            "itemName":          item_doc.get("itemName") if item_doc else None,
+            "hsn":               hsn_number or (item_doc.get("hsn") if item_doc else None),
+            "total_quantity":    stock_info["total_quantity"],
+            "opening_stock":     stock_info["openingStock"],
+            "approved_quantity": stock_info["approved_quantity"],
+            "total_stock":       stock_info["total_stock"],
         })
     except Exception as e:
         return JsonResponse({"success": False, "error": str(e)}, status=500)
@@ -1210,7 +1185,13 @@ def travellers_intent(request):
 
     # ── GET ───────────────────────────────────────────────────────────────────
     if request.method == 'GET':
+        outlet_code = request.GET.get('outlet_code') or request.query_params.get('outlet_code')
         intents = TravellerIntent.objects.all()
+        if outlet_code:
+            if outlet_code == 'OLET001':
+                intents = intents.filter(Q(outlet_code='OLET001') | Q(outlet_code__isnull=True) | Q(outlet_code=''))
+            else:
+                intents = intents.filter(outlet_code=outlet_code)
 
         # ── Date filtering ────────────────────────────────────────────────────
         from_date_str = request.query_params.get('from_date')
@@ -1308,22 +1289,28 @@ def travellers_intent(request):
         else:
             intent_date = date.today()
 
+        outlet_code = request.data.get('outlet_code') if isinstance(request.data, dict) else None
+
         financial_year_start = (
             intent_date.year if intent_date.month >= 4 else intent_date.year - 1
         )
         year_suffix = str(financial_year_start)[-2:]
-        prefix      = f"IN0{year_suffix}/"
 
-        last_intent = (
-            TravellerIntent.objects.filter(intent_number__startswith=prefix)
-            .order_by('-intent_number')
-            .first()
-        )
-        last_number = (
-            int(last_intent.intent_number.split('/')[-1])
-            if last_intent and last_intent.intent_number
-            else 0
-        )
+        prefix = f"IN0{year_suffix}/"
+
+        query = TravellerIntent.objects.filter(intent_number__startswith=prefix)
+        if outlet_code:
+            query = query.filter(outlet_code=outlet_code)
+
+        last_intent = query.order_by('-intent_number').first()
+
+        last_number = 0
+        if last_intent and last_intent.intent_number:
+            try:
+                last_number = int(last_intent.intent_number.split('/')[-1])
+            except (ValueError, IndexError):
+                last_number = 0
+
         new_intent_number = f"{prefix}{last_number + 1:05d}"
 
         # ── Resolve itemName for each item from Items model via item_id ───
@@ -1347,6 +1334,10 @@ def travellers_intent(request):
         data['intent_number'] = new_intent_number
         data['created_by']    = request.data.get("auth-user-id")
         data['items']         = resolved_items
+
+        outlet_code = request.data.get('outlet_code') if isinstance(request.data, dict) else None
+        if outlet_code:
+            data['outlet_code'] = outlet_code
 
         serializer = TravellerIntentSerializer(data=data)
         if serializer.is_valid():
@@ -1412,6 +1403,7 @@ def update_intent_item(request):
     date_str      = request.data.get("date")
     items_updates = request.data.get("items", [])
     employee_id   = request.data.get("auth-user-id")
+    outlet_code   = request.data.get("outlet_code")
 
     if not all([intent_number, date_str, items_updates]):
         return Response(
@@ -1420,14 +1412,24 @@ def update_intent_item(request):
         )
 
     try:
-        intent = TravellerIntent.objects.get(
+        query = TravellerIntent.objects.filter(
             intent_number=intent_number, date=parse_date(date_str)
         )
+        if outlet_code:
+            query = query.filter(outlet_code=outlet_code)
+        intent = query.first()
+        if not intent:
+            intent = TravellerIntent.objects.get(
+                intent_number=intent_number, date=parse_date(date_str)
+            )
     except TravellerIntent.DoesNotExist:
         return Response({"error": "Intent not found"}, status=404)
 
     # ── Always unwrap to a plain list, no matter how many times it was stringified ──
     items = intent.items
+    # Fall back to the intent's stored outlet_code if not provided in the request
+    if not outlet_code:
+        outlet_code = intent.outlet_code
     while isinstance(items, str):
         try:
             items = json.loads(items)
@@ -1512,6 +1514,7 @@ def update_intent_item(request):
                     str(item.get("hsn", "")),
                     stock_to_reduce,
                     employee_id,
+                    outlet_code,
                 ):
                     return Response(
                         {"error": f"Insufficient stock to approve item_id={item.get('item_id')}."},
@@ -1526,6 +1529,7 @@ def update_intent_item(request):
                     str(item.get("hsn", "")),
                     restore_amount,
                     employee_id,
+                    outlet_code,
                 ):
                     return Response(
                         {"error": f"Failed to restore stock for item_id={item.get('item_id')}."},
@@ -1539,12 +1543,26 @@ def update_intent_item(request):
         if i.get("status") in ["Approved", "Partially Approved"]
     )
 
-    # ── Single json.dumps — never double-stringify ────────────────────────────
-    intent.items             = items 
-    intent.approved_qty      = total_approved_qty
-    intent.lastmodified_by   = str(employee_id)
-    intent.lastmodified_date = timezone.now()
-    intent.save()
+    update_kwargs = {
+        "items": items,
+        "lastmodified_by": str(employee_id),
+        "lastmodified_date": timezone.now(),
+    }
+    if outlet_code:
+        update_kwargs["outlet_code"] = outlet_code
+
+    filter_kwargs = {
+        "intent_number": intent_number,
+        "date": parse_date(date_str),
+    }
+    if outlet_code:
+        filter_kwargs["outlet_code"] = outlet_code
+    elif getattr(intent, "outlet_code", None):
+        filter_kwargs["outlet_code"] = intent.outlet_code
+
+    updated_count = TravellerIntent.objects.filter(**filter_kwargs).update(**update_kwargs)
+    if updated_count == 0:
+        TravellerIntent.objects.filter(pk=intent.pk).update(**update_kwargs)
 
     return Response({
         "success":             True,
@@ -1562,6 +1580,7 @@ def soft_delete_intent_item(request):
     intent_number = request.query_params.get('intent_number')
     date_str      = request.query_params.get('date')
     item_id       = request.query_params.get('item_id')
+    outlet_code   = request.query_params.get('outlet_code')
 
     if not (intent_number and date_str and item_id):
         return Response(
@@ -1570,9 +1589,16 @@ def soft_delete_intent_item(request):
         )
 
     try:
-        intent = TravellerIntent.objects.get(
+        query = TravellerIntent.objects.filter(
             intent_number=intent_number, date=parse_date(date_str)
         )
+        if outlet_code:
+            query = query.filter(outlet_code=outlet_code)
+        intent = query.first()
+        if not intent:
+            intent = TravellerIntent.objects.get(
+                intent_number=intent_number, date=parse_date(date_str)
+            )
     except TravellerIntent.DoesNotExist:
         return Response({'error': 'Intent not found'}, status=404)
 
@@ -1590,6 +1616,8 @@ def soft_delete_intent_item(request):
     intent.items             = json.dumps(items)
     intent.lastmodified_by   = request.query_params.get('auth-user-id', 'unknown user')
     intent.lastmodified_date = timezone.now()
+    if outlet_code:
+        intent.outlet_code   = outlet_code
     intent.save()
     return Response({'message': 'Item soft-deleted successfully'}, status=200)
 
@@ -1600,6 +1628,7 @@ def soft_delete_intent(request):
     """Mark all matching TravellerIntent records as inactive."""
     intent_number = request.query_params.get('intent_number')
     date_str      = request.query_params.get('date')
+    outlet_code   = request.query_params.get('outlet_code')
 
     if not intent_number or not date_str:
         return Response({"success": False, "error": "Missing parameters"}, status=400)
@@ -1611,14 +1640,19 @@ def soft_delete_intent(request):
             status=400,
         )
 
-    intents = TravellerIntent.objects.filter(
+    query = TravellerIntent.objects.filter(
         intent_number=intent_number, date=filter_date
     )
-    if not intents.exists():
+    if outlet_code:
+        filtered_query = query.filter(outlet_code=outlet_code)
+        if filtered_query.exists():
+            query = filtered_query
+
+    if not query.exists():
         return Response({"success": False, "error": "Intent not found"}, status=404)
 
-    count = intents.count()
-    intents.update(
+    count = query.count()
+    query.update(
         is_active=False,
         lastmodified_by=request.query_params.get('auth-user-id', 'unknown user'),
         lastmodified_date=timezone.now(),
@@ -1636,7 +1670,13 @@ def get_travellers_intent_by_date_range(request):
     from_date_str = request.query_params.get('from_date')
     to_date_str   = request.query_params.get('to_date')
 
+    outlet_code = request.GET.get('outlet_code') or request.query_params.get('outlet_code')
     queryset = TravellerIntent.objects.all()
+    if outlet_code:
+        if outlet_code == 'OLET001':
+            queryset = queryset.filter(Q(outlet_code='OLET001') | Q(outlet_code__isnull=True) | Q(outlet_code=''))
+        else:
+            queryset = queryset.filter(outlet_code=outlet_code)
 
     if from_date_str:
         from_date = parse_date(from_date_str)

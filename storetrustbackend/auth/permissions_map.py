@@ -15,7 +15,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Stores/delete_item(?:/[^/]+)+/$' : 'STR-API-IL',
 
     # Notification:
-    '/_b_a_c_k_e_n_d/Stores/inventory/check-stock/':'STR-P-ICS',
+    r'^/_b_a_c_k_e_n_d/Stores/inventory/check-stock/?(\?.*)?$':'STR-P-ICS',
 
     # Travellers IN (GRN):
     '/_b_a_c_k_e_n_d/Stores/travellers-in/':'STR-API-TRL',
@@ -37,6 +37,12 @@ PAGE_MAPPING = {
     # Traveller's Intent Report:
     r'^/_b_a_c_k_e_n_d/Stores/travellers-stock/?(\?.*)?$':'STR-P-TINR',
 
+    # Outlets / Store:
+    r'^/_b_a_c_k_e_n_d/Stores/outlets/list/?(\?.*)?$': 'STR-API-IL',
+    r'^/_b_a_c_k_e_n_d/Stores/outlets/?(\?.*)?$': 'STR-API-IL',
+
+    # Stock:
+    r'^/_b_a_c_k_e_n_d/Stores/stock/list/?(\?.*)?$': 'STR-API-IL',
 }
 
 

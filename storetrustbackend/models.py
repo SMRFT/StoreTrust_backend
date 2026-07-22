@@ -6,13 +6,50 @@ import json
 
 class AuditModel(models.Model):
     created_by = models.CharField(max_length=100, null=True, blank=True)
-
     created_date = models.DateTimeField(auto_now_add=True)
     lastmodified_by = models.CharField(max_length=100, blank=True, null=True)
     lastmodified_date = models.DateTimeField(blank=True, null=True)
-    
+    outlet_code = models.CharField(max_length=50, null=True, blank=True)
+
     class Meta:
         abstract = True
+
+
+class Store(AuditModel):
+    outlet_name = models.CharField(max_length=255)
+    outlet_code = models.CharField(max_length=50, unique=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'store'
+        verbose_name = 'Store'
+        verbose_name_plural = 'Stores'
+
+    def __str__(self):
+        return f"{self.outlet_name} ({self.outlet_code})"
+
+
+class Stock(AuditModel):
+    stock_id = models.IntegerField(unique=True, null=True, blank=True)
+    item_id = models.IntegerField()
+    hsn = models.CharField(max_length=50, blank=True, null=True)
+    total_quantity = models.FloatField(default=0)
+    approved_quantity = models.FloatField(default=0)
+    opening_stock = models.FloatField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'stock'
+        ordering = ['-created_date']
+
+    def __str__(self):
+        return f"Stock #{self.stock_id} - Item {self.item_id} ({self.outlet_code})"
+
+    def save(self, *args, **kwargs):
+        if not self.stock_id:
+            last = Stock.objects.order_by('-stock_id').first()
+            self.stock_id = (last.stock_id + 1) if last and last.stock_id else 1
+        super().save(*args, **kwargs)
 
 
 class TravellersIN(AuditModel):
@@ -21,10 +58,7 @@ class TravellersIN(AuditModel):
 
     payment_status = models.JSONField(default=list, blank=True, null=True)
 
-    purchase_category = models.CharField(max_length=50, choices=[
-        ('TRAVELLERS IN CREDIT', 'TRAVELLERS IN CREDIT'),
-        ('TRAVELLERS IN CASH', 'TRAVELLERS IN CASH'),
-    ])
+    purchase_category = models.CharField(max_length=100)
 
     vendor_id = models.CharField(max_length=255, blank=True, null=True)
 
@@ -73,19 +107,18 @@ class TravellersIN(AuditModel):
             return f"{(today.year - 1) % 100}{today.year % 100}"
 
     @staticmethod
-    def generate_grn_number(purchase_category):
+    def generate_grn_number(purchase_category, outlet_code=None):
         with transaction.atomic():
             prefix = TravellersIN.get_financial_year_prefix()
 
-            last_record = (
-                TravellersIN.objects
-                .filter(
-                    purchase_category=purchase_category,
-                    grn_number__startswith=f"{prefix}/"
-                )
-                .order_by('-grn_number')
-                .first()
+            query = TravellersIN.objects.filter(
+                purchase_category=purchase_category,
+                grn_number__startswith=f"{prefix}/"
             )
+            if outlet_code:
+                query = query.filter(outlet_code=outlet_code)
+
+            last_record = query.order_by('-grn_number').first()
 
             if last_record and last_record.grn_number:
                 last_seq = int(last_record.grn_number.split('/')[1])
@@ -105,7 +138,7 @@ class TravellersIN(AuditModel):
             self.grn_id = self.generate_grn_id()
 
         if not self.grn_number:
-            self.grn_number = self.generate_grn_number(self.purchase_category)
+            self.grn_number = self.generate_grn_number(self.purchase_category, self.outlet_code)
 
         if self.pk:
             self.lastmodified_date = timezone.now()
@@ -197,7 +230,6 @@ class Items(AuditModel):
     classification = models.CharField(max_length=50)
     hsn = models.CharField(max_length=20, blank=True, null=True)
     stockReorderLevel = models.CharField(max_length=100)
-    openingStock = models.IntegerField(default=0, blank=True, null=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -220,7 +252,7 @@ class Items(AuditModel):
 
 
 class TravellerIntent(AuditModel):
-    intent_number = models.CharField(max_length=20,primary_key=True, blank=True)
+    intent_number = models.CharField(max_length=50, blank=True, null=True)
     items = models.JSONField(default=list)
     date = models.DateField() 
     is_active = models.BooleanField(default=True)
